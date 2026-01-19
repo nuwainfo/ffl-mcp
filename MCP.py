@@ -16,13 +16,14 @@ from fastmcp import FastMCP
 
 
 logger = logging.getLogger("fflMcp")
+logger.setLevel(logging.DEBUG)
 
 mcp = FastMCP("ffl-mcp")
 
 defaultWaitLinkSeconds = int(os.environ.get("FFL_WAIT_LINK_SECONDS", "20"))
 allowedBaseDir = os.environ.get("ALLOWED_BASE_DIR")
 fflRunMode = os.environ.get("FFL_RUN_MODE", "binary").lower()
-fflBin = os.environ.get("FFL_BIN", "ffl")
+fflBin = os.environ.get("FFL_BIN", os.path.join(os.path.dirname(__file__), "ffl.com"))
 fflPython = os.environ.get("FFL_PYTHON", "python")
 fflCorePath = os.environ.get("FFL_CORE_PATH")
 fflCommandOverride = os.environ.get("FFL_COMMAND")
@@ -207,13 +208,17 @@ def spawnFflAndWaitLink(
     tempPaths.append(jsonPath)
 
     command = buildBaseCommand() + fflArgs + ["--json", jsonPath]
-    logger.info("Starting ffl: %s", " ".join(command))
+    command_str = " ".join(command)
+
+    logger.info("Starting ffl: %s", command_str)
 
     process = subprocess.Popen(
-        command,
+        command_str,
+        shell=True,
         stdin=subprocess.PIPE if stdinBytes is not None else None,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        #stdout=subprocess.DEVNULL,
+        #stderr=subprocess.DEVNULL,
+        cwd=os.path.dirname(__file__),
     )
 
     if stdinBytes is not None and process.stdin is not None:
