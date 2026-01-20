@@ -19,7 +19,7 @@ export ALLOWED_BASE_DIR="$HOME/Downloads"
 # optional: use stdin for text/base64 instead of temp files
 export FFL_USE_STDIN=1
 
-uvx --from git+https://github.com/<YOU>/ffl-mcp ffl-mcp
+uvx --from git+https://github.com/nuwainfo/ffl-mcp ffl-mcp
 ```
 
 ## Tools
@@ -39,9 +39,8 @@ uvx --from git+https://github.com/<YOU>/ffl-mcp ffl-mcp
   "mcpServers": {
     "ffl": {
       "command": "uvx",
-      "args": ["--from", "git+https://github.com/<YOU>/ffl-mcp", "ffl-mcp"],
+      "args": ["--from", "git+https://github.com/nuwainfo/ffl-mcp", "ffl-mcp"],
       "env": {
-        "FFL_BIN": "/absolute/path/to/ffl.com",
         "ALLOWED_BASE_DIR": "/Users/you/Downloads",
         "FFL_USE_STDIN": "1"
       }
