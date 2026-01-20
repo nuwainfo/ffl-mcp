@@ -1,4 +1,5 @@
 # ffl-mcp (local-only)
+MCP server for ffl. Let AI share anything for you.
 
 This is a minimal MCP server that shells out to `ffl` / `ffl.com` locally.
 No file contents are sent to the LLM; the model only triggers local `ffl`.
