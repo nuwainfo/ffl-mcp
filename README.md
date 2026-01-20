@@ -49,6 +49,16 @@ uvx --from git+https://github.com/nuwainfo/ffl-mcp ffl-mcp
 }
 ```
 
+## Claude Desktop auto-install (no JSON)
+
+```bash
+FFL_BIN="$HOME/bin/ffl.com" uvx --from git+https://github.com/nuwainfo/ffl-mcp ffl-mcp-install
+```
+
+```bash
+uvx --from git+https://github.com/nuwainfo/ffl-mcp ffl-mcp-install --print
+```
+
 ## Notes
 
 - `FFL_USE_STDIN=1` avoids writing text/base64 payloads to disk.

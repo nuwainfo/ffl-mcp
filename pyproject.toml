@@ -15,6 +15,7 @@ dependencies = [
 
 [project.scripts]
 ffl-mcp = "src.MCP:main"
+ffl-mcp-install = "dist.install:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src"]
+packages = ["src", "dist"]
