@@ -1,46 +1,57 @@
-# ffl-mcp
+# ffl-mcp (local-only)
 
-MCP server that exposes FastFileLink (ffl/ffl.com/Core.py --cli) as tools.
+This is a minimal MCP server that shells out to `ffl` / `ffl.com` locally.
+No file contents are sent to the LLM; the model only triggers local `ffl`.
 
-## Install
+## Run (no PyPI, run directly from Git)
 
-```
-pip install -r requirements.txt
-```
+Prereq: `uv` installed.
 
-## Environment
+```bash
+# point to your local ffl.com (APE) or "ffl" on PATH
+export FFL_BIN="$HOME/bin/ffl.com"
+chmod +x "$FFL_BIN"
 
-- `FFL_RUN_MODE`: `binary` (default) or `python`
-- `FFL_BIN`: path to `ffl` or `ffl.com` (default: `ffl`)
-- `FFL_CORE_PATH`: path to `Core.py` when `FFL_RUN_MODE=python`
-- `FFL_PYTHON`: python executable for Core.py (default: `python`)
-- `FFL_COMMAND`: full command override (e.g. `"/path/to/ffl.com"` or `"python /path/Core.py --cli"`)
-- `FFL_USE_STDIN`: `1|true|yes` to use stdin for text/base64 (default: temp file)
-- `ALLOWED_BASE_DIR`: optional base dir restriction for `fflShareFile`
-- `FFL_WAIT_LINK_SECONDS`: seconds to wait for JSON link (default: 20)
+# optional safety: restrict file sharing to a directory
+export ALLOWED_BASE_DIR="$HOME/Downloads"
 
-## Run (stdio)
+# optional: use stdin for text/base64 instead of temp files
+export FFL_USE_STDIN=1
 
-```
-python mcp_ffl.py
+uvx --from git+https://github.com/<YOU>/ffl-mcp ffl-mcp
 ```
 
-## Run (http/sse)
+## Tools
 
+- `fflShareText(text, ...) -> {sessionId, link, ...}`
+- `fflShareBase64(dataB64, ...) -> {sessionId, link, ...}`
+- `fflShareFile(path, ...) -> {sessionId, link, ...}`
+- `fflListSessions()`
+- `fflStopSession(sessionId)`
+- `fflGetSession(sessionId)`
+- `fflGetSessionEvents(sessionId, limit=50)`
+
+## Claude Desktop / Claude Code config (uvx)
+
+```json
+{
+  "mcpServers": {
+    "ffl": {
+      "command": "uvx",
+      "args": ["--from", "git+https://github.com/<YOU>/ffl-mcp", "ffl-mcp"],
+      "env": {
+        "FFL_BIN": "/absolute/path/to/ffl.com",
+        "ALLOWED_BASE_DIR": "/Users/you/Downloads",
+        "FFL_USE_STDIN": "1"
+      }
+    }
+  }
+}
 ```
-python mcp_ffl.py --transport http --host 127.0.0.1 --port 8000 --path /mcp
-```
-
-## Tool names
-
-- `fflShareText`
-- `fflShareBase64`
-- `fflShareFile`
-- `fflListSessions`
-- `fflGetSession`
-- `fflStopSession`
 
 ## Notes
 
-- `fflShareFile` enforces `ALLOWED_BASE_DIR` when set.
-- `fflShareText`/`fflShareBase64` use temp files by default for compatibility with Core.py.
+- `FFL_USE_STDIN=1` avoids writing text/base64 payloads to disk.
+- `FFL_RUN_MODE=python` runs the Core.py CLI (requires `FFL_CORE_PATH`).
+- `--hook` and `--proxy` are passed through to ffl.
+- `FFL_USE_HOOK=1` starts a local webhook server and passes it to `ffl` for link/progress events.
