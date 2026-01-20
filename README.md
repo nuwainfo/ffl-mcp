@@ -52,11 +52,17 @@ uvx --from git+https://github.com/nuwainfo/ffl-mcp ffl-mcp
 ## Claude Desktop auto-install (no JSON)
 
 ```bash
-FFL_BIN="$HOME/bin/ffl.com" uvx --from git+https://github.com/nuwainfo/ffl-mcp ffl-mcp-install
+FFL_BIN="$HOME/bin/ffl.com" uvx --from git+https://github.com/nuwainfo/ffl-mcp install
 ```
 
 ```bash
-uvx --from git+https://github.com/nuwainfo/ffl-mcp ffl-mcp-install --print
+uvx --from git+https://github.com/nuwainfo/ffl-mcp install --print
+```
+
+For Claude Code/CLI or other MCP clients that use a different config file, pass the path:
+
+```bash
+uvx --from git+https://github.com/nuwainfo/ffl-mcp install --config /path/to/claude_desktop_config.json
 ```
 
 ## Notes
