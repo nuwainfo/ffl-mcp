@@ -9,7 +9,7 @@ No file contents are sent to the LLM; the model only triggers local `ffl`.
 Prereq: `uv` installed.
 
 ```bash
-# point to your local ffl.com (APE) or "ffl" on PATH
+# optional: override embedded ffl.com (APE) or use "ffl" on PATH
 export FFL_BIN="$HOME/bin/ffl.com"
 chmod +x "$FFL_BIN"
 
@@ -59,7 +59,8 @@ FFL_BIN="$HOME/bin/ffl.com" uvx --from git+https://github.com/nuwainfo/ffl-mcp i
 uvx --from git+https://github.com/nuwainfo/ffl-mcp install --print
 ```
 
-For Claude Code/CLI or other MCP clients that use a different config file, pass the path:
+If Claude Code CLI is installed, the installer also runs `claude mcp add` automatically (user scope).
+For other MCP clients or custom config paths, pass the file:
 
 ```bash
 uvx --from git+https://github.com/nuwainfo/ffl-mcp install --config /path/to/claude_desktop_config.json

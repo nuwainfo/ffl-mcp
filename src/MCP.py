@@ -41,6 +41,8 @@ mcp = FastMCP("ffl-mcp")
 def resolveDefaultFflBin() -> str:
     localFfl = pathlib.Path(__file__).resolve().parent / "ffl.com"
     if localFfl.exists():
+        if not os.access(localFfl, os.X_OK):
+            os.chmod(localFfl, 0o755)
         return str(localFfl)
     return "ffl"
 

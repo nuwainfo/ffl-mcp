@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ffl-mcp"
-version = "0.0.2"
+version = "0.0.5"
 description = "Local-only MCP server for ffl/ffl.com (APE)"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -19,3 +19,7 @@ install = "install.install:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src", "install"]
+include = ["src/ffl.com"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src/ffl.com"]

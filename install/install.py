@@ -22,6 +22,8 @@ import importlib.metadata
 import json
 import os
 import pathlib
+import shutil
+import subprocess
 import sys
 from typing import Any, Dict, Optional, Tuple
 
@@ -110,14 +112,20 @@ def inferUvxFromSpec() -> Optional[str]:
     
     if not isinstance(url, str) or not url:
         return None
-        
-    if not isinstance(vcsInfo, dict) or not vcsInfo:
-        return None
+    if url.startswith("file://"):
+        return url
 
     if url.startswith("git+"):
         return url
-        
-    return "git+" + url
+
+    if isinstance(vcsInfo, dict) and vcsInfo:
+        return "git+" + url
+
+    if url.startswith(("https://", "ssh://", "git://")):
+        if url.endswith(".git") or "github.com" in url or "gitlab.com" in url or "bitbucket.org" in url:
+            return "git+" + url
+
+    return None
 
 
 def collectEnv(overrides: Dict[str, str]) -> Dict[str, str]:
@@ -150,6 +158,83 @@ def buildMcpServerEntry(
     if env:
         entry["env"] = env
     return serverName, entry
+
+
+def getClaudeCliPath() -> Optional[str]:
+    envPath = os.environ.get("CLAUDE_CLI_PATH") or os.environ.get("CLAUDE_BIN")
+    if envPath and pathlib.Path(envPath).exists():
+        return envPath
+
+    whichPath = shutil.which("claude")
+    if whichPath:
+        return whichPath
+
+    homePath = pathlib.Path.home()
+    candidatePaths = [
+        homePath / ".local" / "bin" / "claude",
+        homePath / ".volta" / "bin" / "claude",
+        homePath / ".asdf" / "shims" / "claude",
+        pathlib.Path("/usr/local/bin/claude"),
+        pathlib.Path("/opt/homebrew/bin/claude"),
+        pathlib.Path("/usr/bin/claude"),
+    ]
+    for candidate in candidatePaths:
+        if candidate.exists():
+            return str(candidate)
+
+    nvmRoots = [os.environ.get("NVM_DIR"), str(homePath / ".nvm")]
+    for nvmRoot in nvmRoots:
+        if not nvmRoot:
+            continue
+        nvmPath = pathlib.Path(nvmRoot)
+        if not nvmPath.exists():
+            continue
+        for candidate in nvmPath.glob("versions/node/*/bin/claude"):
+            if candidate.exists():
+                return str(candidate)
+    return None
+
+
+def buildUvxArgs(uvxFrom: Optional[str], entrypoint: str) -> Dict[str, Any]:
+    args = ["uvx"]
+    if uvxFrom:
+        args += ["--from", uvxFrom]
+    args.append(entrypoint)
+    return {"command": args[0], "args": args[1:]}
+
+
+def runCommand(command: list[str], allowFailure: bool = False) -> None:
+    result = subprocess.run(command, check=False, capture_output=True, text=True)
+    if result.returncode == 0:
+        return
+    if allowFailure:
+        return
+    stderrText = result.stderr.strip()
+    stdoutText = result.stdout.strip()
+    detailParts = [part for part in [stderrText, stdoutText] if part]
+    detail = detailParts[0] if detailParts else "Unknown error"
+    raise RuntimeError(f"Command failed: {' '.join(command)}: {detail}")
+
+
+def installClaudeCliServer(
+    serverName: str,
+    entry: Dict[str, Any],
+    overwrite: bool,
+    scope: str,
+    cliPath: str,
+) -> None:
+    command = [
+        cliPath,
+        "mcp",
+        "add-json",
+        "-s",
+        scope,
+        serverName,
+        json.dumps(entry, ensure_ascii=True),
+    ]
+    if overwrite:
+        runCommand([cliPath, "mcp", "remove", "-s", scope, serverName], allowFailure=True)
+    runCommand(command)
 
 
 class DesktopConfigInstaller:
@@ -204,6 +289,7 @@ def main() -> None:
     parser.add_argument("--ffl-bin", dest="fflBin")
     parser.add_argument("--allowed-base-dir", dest="allowedBaseDir")
     parser.add_argument("--use-stdin", choices=["0", "1"], dest="useStdin")
+    parser.add_argument("--cli-scope", dest="cliScope", default="user")
     args = parser.parse_args()
 
     if args.configPath:
@@ -233,12 +319,24 @@ def main() -> None:
         print(json.dumps({name: entry}, ensure_ascii=True, indent=2))
         return
 
+    claudeCliPath = getClaudeCliPath()
+    if claudeCliPath:
+        installClaudeCliServer(
+            serverName=args.serverName,
+            entry=entry,
+            overwrite=args.overwrite,
+            scope=args.cliScope,
+            cliPath=claudeCliPath,
+        )
+
     installer = DesktopConfigInstaller(configPath)
     config = installer.readConfig()
     updatedConfig = installer.addServer(config, args.serverName, entry, args.overwrite)
     backupPath = installer.backupConfig()
     installer.writeConfig(updatedConfig)
 
+    if claudeCliPath:
+        print(f"Installed ffl-mcp into Claude Code CLI (scope: {args.cliScope}).")
     print("Installed ffl-mcp into Claude Desktop config.")
     print(f"Config: {configPath}")
     
