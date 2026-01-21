@@ -55,6 +55,7 @@ fflPython = os.environ.get("FFL_PYTHON", "python")
 fflCorePath = os.environ.get("FFL_CORE_PATH")
 fflCommandOverride = os.environ.get("FFL_COMMAND")
 fflUseStdin = os.environ.get("FFL_USE_STDIN", "").lower() in ("1", "true", "yes")
+fflShellMode = os.environ.get("FFL_SHELL", "").lower() in ("1", "true", "yes")
 fflUseHook = os.environ.get("FFL_USE_HOOK", "1").lower() in ("1", "true", "yes")
 fflHookHost = os.environ.get("FFL_HOOK_HOST", "127.0.0.1")
 fflHookPath = os.environ.get("FFL_HOOK_PATH", "/events")
@@ -358,6 +359,14 @@ def buildBaseCommand() -> List[str]:
     return [fflBin]
 
 
+def shouldUseShell(command: List[str]) -> bool:
+    if fflShellMode:
+        return True
+    if not command:
+        return False
+    return command[0].endswith(".com")
+
+
 def buildShareArgs(
     shareTarget: str,
     name: Optional[str],
@@ -415,17 +424,29 @@ def spawnFflAndWaitLink(
     tempPaths.append(jsonPath)
 
     command = buildBaseCommand() + fflArgs + ["--json", jsonPath]
+    useShell = shouldUseShell(command)
 
     logger.info("Starting ffl: %s", shlex.join(command))
 
-    process = subprocess.Popen(
-        command,
-        shell=False,
-        stdin=subprocess.PIPE if stdinBytes is not None else None,
-        #stdout=subprocess.DEVNULL,
-        #stderr=subprocess.DEVNULL,
-        cwd=os.path.dirname(__file__),
-    )
+    if useShell:
+        commandText = shlex.join(command)
+        process = subprocess.Popen(
+            commandText,
+            shell=True,
+            stdin=subprocess.PIPE if stdinBytes is not None else None,
+            #stdout=subprocess.DEVNULL,
+            #stderr=subprocess.DEVNULL,
+            cwd=os.path.dirname(__file__),
+        )
+    else:
+        process = subprocess.Popen(
+            command,
+            shell=False,
+            stdin=subprocess.PIPE if stdinBytes is not None else None,
+            #stdout=subprocess.DEVNULL,
+            #stderr=subprocess.DEVNULL,
+            cwd=os.path.dirname(__file__),
+        )
 
     if stdinBytes is not None and process.stdin is not None:
         process.stdin.write(stdinBytes)

@@ -290,6 +290,7 @@ def main() -> None:
     parser.add_argument("--allowed-base-dir", dest="allowedBaseDir")
     parser.add_argument("--use-stdin", choices=["0", "1"], dest="useStdin")
     parser.add_argument("--cli-scope", dest="cliScope", default="user")
+    parser.add_argument("-y", "--yes", action="store_true", dest="assumeYes")
     args = parser.parse_args()
 
     if args.configPath:
@@ -308,10 +309,15 @@ def main() -> None:
         envOverrides["FFL_USE_STDIN"] = args.useStdin
 
     env = collectEnv(envOverrides)
-    if "ALLOWED_BASE_DIR" not in env:
-        env["ALLOWED_BASE_DIR"] = str(pathlib.Path.home() / "Downloads")
     if "FFL_USE_STDIN" not in env:
         env["FFL_USE_STDIN"] = "1"
+
+    if "ALLOWED_BASE_DIR" not in env and not args.assumeYes:
+        print("Warning: ALLOWED_BASE_DIR is not set. This allows sharing any path.")
+        print("Recommended: set --allowed-base-dir to restrict file sharing.")
+        response = input("Continue without ALLOWED_BASE_DIR? [y/N]: ").strip().lower()
+        if response not in ("y", "yes"):
+            raise SystemExit(1)
 
     name, entry = buildMcpServerEntry(args.serverName, uvxFrom, args.entrypoint, env)
 
