@@ -26,7 +26,7 @@ uvx --from git+https://github.com/nuwainfo/ffl-mcp ffl-mcp
 ## Claude Desktop / Claude Code auto-install (no JSON)
 
 ```bash
-FFL_BIN="$HOME/bin/ffl.com" uvx --from git+https://github.com/nuwainfo/ffl-mcp install
+uvx --from git+https://github.com/nuwainfo/ffl-mcp install
 ```
 
 ```bash
