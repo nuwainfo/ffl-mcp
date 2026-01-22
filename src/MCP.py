@@ -38,6 +38,55 @@ logger.setLevel(logging.DEBUG)
 
 mcp = FastMCP("ffl-mcp")
 
+
+def isRunningInWSL() -> bool:
+    """Check if running in WSL (Windows Subsystem for Linux)"""
+    try:
+        with open("/proc/version", "r") as f:
+            version = f.read().lower()
+            return "microsoft" in version or "wsl" in version
+    except Exception:
+        return False
+
+
+def checkWSLInteropIssue() -> Optional[str]:
+    """
+    Check if WSLInterop is causing issues with .com files.
+    Returns error message with instructions if fix is needed, None otherwise.
+    """
+    if not isRunningInWSL():
+        return None
+
+    # Check if running in WSL2 - provide fix instructions
+    # Even if WSLInterop doesn't exist, the interop mechanism may still cause issues
+    wslInteropPath = pathlib.Path("/proc/sys/fs/binfmt_misc/WSLInterop")
+
+    if wslInteropPath.exists():
+        try:
+            with open(wslInteropPath, "r") as f:
+                content = f.read()
+                if "enabled" in content.lower():
+                    return (
+                        "WSL2 WSLInterop is interfering with ffl.com execution.\n\n"
+                        "To fix this, run the following command in your WSL terminal:\n\n"
+                        "    sudo sh -c 'echo -1 > /proc/sys/fs/binfmt_misc/WSLInterop'\n\n"
+                        "This disables Windows interop for .com files, allowing ffl.com to run natively as an APE binary.\n"
+                        "You may need to restart your WSL session after running this command."
+                    )
+        except Exception:
+            pass
+
+    # WSLInterop file doesn't exist or is already disabled
+    # But we're still in WSL2, so provide general guidance
+    return (
+        "ffl.com execution failed in WSL2.\n\n"
+        "This may be due to Windows interop interference with .com files.\n"
+        "Try running this command to disable Windows interop for .com files:\n\n"
+        "    sudo sh -c 'echo -1 > /proc/sys/fs/binfmt_misc/WSLInterop'\n\n"
+        "If WSLInterop doesn't exist, try restarting your WSL session.\n"
+        "Alternatively, use FFL_RUN_MODE=python with FFL_CORE_PATH pointing to the ffl Core.py file."
+    )
+
 def resolveDefaultFflBin() -> str:
     localFfl = pathlib.Path(__file__).resolve().parent / "ffl.com"
     if localFfl.exists():
@@ -336,10 +385,22 @@ def waitForLink(jsonPath: str, waitSeconds: int, hookServer: Optional[HookServer
             if link:
                 return link
         time.sleep(0.15)
-    raise RuntimeError(
-        f"ffl did not produce a link within {waitSeconds}s. "
-        "Check your FFL_BIN/FFL_CORE_PATH configuration."
-    )
+
+    # Timeout occurred - provide helpful error message
+    errorMsg = f"ffl did not produce a link within {waitSeconds}s."
+
+    # Check for WSL interop issue
+    wslInteropMsg = checkWSLInteropIssue()
+    if wslInteropMsg:
+        errorMsg += f"\n\n{wslInteropMsg}"
+    else:
+        errorMsg += "\n\nCheck your FFL_BIN/FFL_CORE_PATH configuration."
+
+    # Add debug log hint if available
+    if fflDebug:
+        errorMsg += "\n\nCheck the debug log (debugLogPath in response) for detailed error information."
+
+    raise RuntimeError(errorMsg)
 
 
 def createTempFile(fileName: str, data: bytes) -> str:

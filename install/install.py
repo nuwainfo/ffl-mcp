@@ -195,6 +195,41 @@ def getClaudeCliPath() -> Optional[str]:
     return None
 
 
+def getCodexCliPath() -> Optional[str]:
+    envPath = os.environ.get("CODEX_CLI_PATH") or os.environ.get("CODEX_BIN")
+    if envPath and pathlib.Path(envPath).exists():
+        return envPath
+
+    whichPath = shutil.which("codex")
+    if whichPath:
+        return whichPath
+
+    homePath = pathlib.Path.home()
+    candidatePaths = [
+        homePath / ".local" / "bin" / "codex",
+        homePath / ".volta" / "bin" / "codex",
+        homePath / ".asdf" / "shims" / "codex",
+        pathlib.Path("/usr/local/bin/codex"),
+        pathlib.Path("/opt/homebrew/bin/codex"),
+        pathlib.Path("/usr/bin/codex"),
+    ]
+    for candidate in candidatePaths:
+        if candidate.exists():
+            return str(candidate)
+
+    nvmRoots = [os.environ.get("NVM_DIR"), str(homePath / ".nvm")]
+    for nvmRoot in nvmRoots:
+        if not nvmRoot:
+            continue
+        nvmPath = pathlib.Path(nvmRoot)
+        if not nvmPath.exists():
+            continue
+        for candidate in nvmPath.glob("versions/node/*/bin/codex"):
+            if candidate.exists():
+                return str(candidate)
+    return None
+
+
 def buildUvxArgs(uvxFrom: Optional[str], entrypoint: str) -> Dict[str, Any]:
     args = ["uvx"]
     if uvxFrom:
@@ -234,6 +269,25 @@ def installClaudeCliServer(
     ]
     if overwrite:
         runCommand([cliPath, "mcp", "remove", "-s", scope, serverName], allowFailure=True)
+    runCommand(command)
+
+
+def installCodexCliServer(
+    serverName: str,
+    uvxFrom: Optional[str],
+    entrypoint: str,
+    env: Dict[str, str],
+    overwrite: bool,
+    cliPath: str,
+) -> None:
+    envArgs = []
+    for key in sorted(env.keys()):
+        envArgs += ["--env", f"{key}={env[key]}"]
+
+    uvxArgs = buildUvxArgs(uvxFrom, entrypoint)
+    command = [cliPath, "mcp", "add"] + envArgs + [serverName, "--", uvxArgs["command"]] + uvxArgs["args"]
+    if overwrite:
+        runCommand([cliPath, "mcp", "remove", serverName], allowFailure=True)
     runCommand(command)
 
 
@@ -290,6 +344,12 @@ def main() -> None:
     parser.add_argument("--allowed-base-dir", dest="allowedBaseDir")
     parser.add_argument("--use-stdin", choices=["0", "1"], dest="useStdin")
     parser.add_argument("--cli-scope", dest="cliScope", default="user")
+    parser.add_argument(
+        "--target",
+        dest="installTargets",
+        default="all",
+        help="Comma-separated: all, claude-desktop, claude-cli, codex-cli",
+    )
     parser.add_argument("-y", "--yes", action="store_true", dest="assumeYes")
     args = parser.parse_args()
 
@@ -325,29 +385,56 @@ def main() -> None:
         print(json.dumps({name: entry}, ensure_ascii=True, indent=2))
         return
 
-    claudeCliPath = getClaudeCliPath()
-    if claudeCliPath:
-        installClaudeCliServer(
-            serverName=args.serverName,
-            entry=entry,
-            overwrite=args.overwrite,
-            scope=args.cliScope,
-            cliPath=claudeCliPath,
-        )
+    installTargetsRaw = [part.strip() for part in args.installTargets.split(",")]
+    installTargets = [part for part in installTargetsRaw if part]
+    if "all" in installTargets:
+        installTargets = ["claude-desktop", "claude-cli", "codex-cli"]
 
-    installer = DesktopConfigInstaller(configPath)
-    config = installer.readConfig()
-    updatedConfig = installer.addServer(config, args.serverName, entry, args.overwrite)
-    backupPath = installer.backupConfig()
-    installer.writeConfig(updatedConfig)
+    allowedTargets = {"claude-desktop", "claude-cli", "codex-cli"}
+    invalidTargets = [part for part in installTargets if part not in allowedTargets]
+    if invalidTargets:
+        raise ValueError(f"Invalid --install-targets: {', '.join(invalidTargets)}")
 
-    if claudeCliPath:
+    backupPath = None
+    if "claude-cli" in installTargets:
+        claudeCliPath = getClaudeCliPath()
+        if claudeCliPath:
+            installClaudeCliServer(
+                serverName=args.serverName,
+                entry=entry,
+                overwrite=args.overwrite,
+                scope=args.cliScope,
+                cliPath=claudeCliPath,
+            )
+
+    if "codex-cli" in installTargets:
+        codexCliPath = getCodexCliPath()
+        if codexCliPath:
+            installCodexCliServer(
+                serverName=args.serverName,
+                uvxFrom=uvxFrom,
+                entrypoint=args.entrypoint,
+                env=env,
+                overwrite=args.overwrite,
+                cliPath=codexCliPath,
+            )
+
+    if "claude-desktop" in installTargets:
+        installer = DesktopConfigInstaller(configPath)
+        config = installer.readConfig()
+        updatedConfig = installer.addServer(config, args.serverName, entry, args.overwrite)
+        backupPath = installer.backupConfig()
+        installer.writeConfig(updatedConfig)
+
+    if "claude-cli" in installTargets and getClaudeCliPath():
         print(f"Installed ffl-mcp into Claude Code CLI (scope: {args.cliScope}).")
-    print("Installed ffl-mcp into Claude Desktop config.")
-    print(f"Config: {configPath}")
-    
-    if backupPath:
-        print(f"Backup: {backupPath}")
+    if "codex-cli" in installTargets and getCodexCliPath():
+        print("Installed ffl-mcp into Codex CLI.")
+    if "claude-desktop" in installTargets:
+        print("Installed ffl-mcp into Claude Desktop config.")
+        print(f"Config: {configPath}")
+        if backupPath:
+            print(f"Backup: {backupPath}")
         
     print("Next: restart Claude Desktop (or reload MCP servers if your client supports it).")
     print(f"Server name: {args.serverName}")

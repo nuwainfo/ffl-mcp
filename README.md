@@ -23,10 +23,16 @@ uvx --from git+https://github.com/nuwainfo/ffl-mcp ffl-mcp
 ```
 
 
-## Claude Desktop / Claude Code auto-install (no JSON)
+## Claude Desktop / Claude Code / Codex auto-install (no JSON)
 
 ```bash
 uvx --from git+https://github.com/nuwainfo/ffl-mcp install
+```
+
+Targets can be controlled with `--target` (default: all):
+
+```bash
+uvx --from git+https://github.com/nuwainfo/ffl-mcp install --target claude-desktop,codex-cli
 ```
 
 ```bash
@@ -34,6 +40,7 @@ uvx --from git+https://github.com/nuwainfo/ffl-mcp install --print
 ```
 
 If Claude Code CLI is installed, the installer also runs `claude mcp add` automatically (user scope).
+If Codex CLI is installed, the installer also runs `codex mcp add` automatically.
 For other MCP clients or custom config paths, pass the file:
 
 ```bash
@@ -76,3 +83,13 @@ All share functions support QR code generation via `generateQr=True`. When enabl
 - `--hook` and `--proxy` are passed through to ffl.
 - `FFL_USE_HOOK=1` starts a local webhook server and passes it to `ffl` for link/progress events.
 - `FFL_DEBUG=1` enables debug logging - ffl output is saved to a temp file with path returned in `debugLogPath`.
+
+## WSL2 Users
+
+If you encounter `TLSError([0x6300])` errors, run this command to disable Windows interop for `.com` files:
+
+```bash
+sudo sh -c 'echo -1 > /proc/sys/fs/binfmt_misc/WSLInterop'
+```
+
+This allows ffl.com (APE binary) to run natively on Linux instead of being executed through Windows.
