@@ -22,15 +22,23 @@ export FFL_USE_STDIN=1
 uvx --from git+https://github.com/nuwainfo/ffl-mcp ffl-mcp
 ```
 
-## Tools
 
-- `fflShareText(text, ...) -> {sessionId, link, ...}`
-- `fflShareBase64(dataB64, ...) -> {sessionId, link, ...}`
-- `fflShareFile(path, ...) -> {sessionId, link, ...}`
-- `fflListSessions()`
-- `fflStopSession(sessionId)`
-- `fflGetSession(sessionId)`
-- `fflGetSessionEvents(sessionId, limit=50)`
+## Claude Desktop / Claude Code auto-install (no JSON)
+
+```bash
+FFL_BIN="$HOME/bin/ffl.com" uvx --from git+https://github.com/nuwainfo/ffl-mcp install
+```
+
+```bash
+uvx --from git+https://github.com/nuwainfo/ffl-mcp install --print
+```
+
+If Claude Code CLI is installed, the installer also runs `claude mcp add` automatically (user scope).
+For other MCP clients or custom config paths, pass the file:
+
+```bash
+uvx --from git+https://github.com/nuwainfo/ffl-mcp install --config /path/to/claude_desktop_config.json
+```
 
 ## Claude Desktop / Claude Code config (uvx)
 
@@ -49,22 +57,15 @@ uvx --from git+https://github.com/nuwainfo/ffl-mcp ffl-mcp
 }
 ```
 
-## Claude Desktop / Claude Code auto-install (no JSON)
+## Tools
 
-```bash
-FFL_BIN="$HOME/bin/ffl.com" uvx --from git+https://github.com/nuwainfo/ffl-mcp install
-```
-
-```bash
-uvx --from git+https://github.com/nuwainfo/ffl-mcp install --print
-```
-
-If Claude Code CLI is installed, the installer also runs `claude mcp add` automatically (user scope).
-For other MCP clients or custom config paths, pass the file:
-
-```bash
-uvx --from git+https://github.com/nuwainfo/ffl-mcp install --config /path/to/claude_desktop_config.json
-```
+- `fflShareText(text, ...) -> {sessionId, link, ...}`
+- `fflShareBase64(dataB64, ...) -> {sessionId, link, ...}`
+- `fflShareFile(path, ...) -> {sessionId, link, ...}`
+- `fflListSessions()`
+- `fflStopSession(sessionId)`
+- `fflGetSession(sessionId)`
+- `fflGetSessionEvents(sessionId, limit=50)`
 
 ## Notes
 
