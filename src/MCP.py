@@ -62,6 +62,7 @@ fflHookPath = os.environ.get("FFL_HOOK_PATH", "/events")
 fflHookUsername = os.environ.get("FFL_HOOK_USERNAME", "ffl-mcp")
 fflHookPassword = os.environ.get("FFL_HOOK_PASSWORD")
 fflHookMaxEvents = int(os.environ.get("FFL_HOOK_MAX_EVENTS", "200"))
+fflDebug = os.environ.get("FFL_DEBUG", "").lower() in ("1", "true", "yes")
 
 
 def parseBasicAuthHeader(headerValue: Optional[str]) -> Optional[Dict[str, str]]:
@@ -377,6 +378,7 @@ def buildShareArgs(
     timeoutSeconds: int,
     hookUrl: Optional[str],
     proxy: Optional[str],
+    qrPath: Optional[str],
 ) -> List[str]:
     args = [shareTarget, "--max-downloads", str(maxDownloads), "--timeout", str(timeoutSeconds)]
     if name:
@@ -391,6 +393,10 @@ def buildShareArgs(
         args += ["--hook", hookUrl]
     if proxy:
         args += ["--proxy", proxy]
+    if qrPath:
+        args += ["--qr", qrPath]
+    if fflDebug:
+        args += ["--log-level", "DEBUG"]
     return args
 
 
@@ -416,6 +422,7 @@ def spawnFflAndWaitLink(
     waitSeconds: int,
     tempPaths: Optional[List[str]] = None,
     hookServer: Optional[HookServer] = None,
+    qrPath: Optional[str] = None,
 ) -> Dict[str, Any]:
     tempPaths = tempPaths or []
     jsonTemp = tempfile.NamedTemporaryFile(prefix="ffl_", suffix=".json", delete=False)
@@ -428,14 +435,25 @@ def spawnFflAndWaitLink(
 
     logger.info("Starting ffl: %s", shlex.join(command))
 
+    # Setup debug logging
+    logFile = None
+    logPath = None
+    if fflDebug:
+        logTemp = tempfile.NamedTemporaryFile(prefix="ffl_debug_", suffix=".log", delete=False, mode="w")
+        logPath = logTemp.name
+        logTemp.close()
+        tempPaths.append(logPath)
+        logFile = open(logPath, "w")
+        logger.info("FFL_DEBUG=1: Logging ffl output to %s", logPath)
+
     if useShell:
         commandText = shlex.join(command)
         process = subprocess.Popen(
             commandText,
             shell=True,
             stdin=subprocess.PIPE if stdinBytes is not None else None,
-            #stdout=subprocess.DEVNULL,
-            #stderr=subprocess.DEVNULL,
+            stdout=logFile if logFile else subprocess.DEVNULL,
+            stderr=logFile if logFile else subprocess.DEVNULL,
             cwd=os.path.dirname(__file__),
         )
     else:
@@ -443,8 +461,8 @@ def spawnFflAndWaitLink(
             command,
             shell=False,
             stdin=subprocess.PIPE if stdinBytes is not None else None,
-            #stdout=subprocess.DEVNULL,
-            #stderr=subprocess.DEVNULL,
+            stdout=logFile if logFile else subprocess.DEVNULL,
+            stderr=logFile if logFile else subprocess.DEVNULL,
             cwd=os.path.dirname(__file__),
         )
 
@@ -466,12 +484,21 @@ def spawnFflAndWaitLink(
                     process.kill()
                 except Exception as exc:
                     logger.debug("Failed to kill ffl process: %s", exc)
+        if logFile:
+            try:
+                logFile.close()
+            except Exception as exc:
+                logger.debug("Failed to close log file: %s", exc)
         if hookServer:
             try:
                 hookServer.stop()
             except Exception as exc:
                 logger.debug("Failed to stop hook server: %s", exc)
         for path in tempPaths:
+            # Keep debug log files for troubleshooting
+            if fflDebug and path.endswith(".log"):
+                logger.info("Debug log preserved at: %s", path)
+                continue
             try:
                 os.remove(path)
             except Exception as exc:
@@ -492,7 +519,21 @@ def spawnFflAndWaitLink(
         }
     )
 
-    return {"sessionId": sessionId, "link": link, "pid": process.pid, "jsonPath": jsonPath, "cmd": command}
+    result = {"sessionId": sessionId, "link": link, "pid": process.pid, "jsonPath": jsonPath, "cmd": command}
+
+    if qrPath and os.path.exists(qrPath):
+        try:
+            with open(qrPath, "rb") as qrFile:
+                qrData = qrFile.read()
+                result["qrCodeBase64"] = base64.b64encode(qrData).decode("utf-8")
+                result["qrCodePath"] = qrPath
+        except Exception as exc:
+            logger.debug("Failed to read QR code file %s: %s", qrPath, exc)
+
+    if logPath:
+        result["debugLogPath"] = logPath
+
+    return result
 
 
 @mcp.tool
@@ -507,11 +548,21 @@ def fflShareText(
     waitLinkSeconds: int = defaultWaitLinkSeconds,
     hookUrl: Optional[str] = None,
     proxy: Optional[str] = None,
+    generateQr: bool = False,
 ) -> Dict[str, Any]:
     """
     Share a short text using ffl. Returns a sessionId and link.
+    If generateQr is True, also returns a QR code as base64.
     """
     tempPaths: List[str] = []
+    qrPath = None
+
+    if generateQr:
+        qrTemp = tempfile.NamedTemporaryFile(prefix="ffl_qr_", suffix=".png", delete=False)
+        qrPath = qrTemp.name
+        qrTemp.close()
+        tempPaths.append(qrPath)
+
     hookInfo = startHookServerIfNeeded(hookUrl)
     hookServer = hookInfo["hookServer"]
     effectiveHookUrl = hookInfo["hookUrl"]
@@ -526,8 +577,9 @@ def fflShareText(
             timeoutSeconds,
             effectiveHookUrl,
             proxy,
+            qrPath,
         )
-        return spawnFflAndWaitLink(args, text.encode("utf-8"), waitLinkSeconds, tempPaths, hookServer)
+        return spawnFflAndWaitLink(args, text.encode("utf-8"), waitLinkSeconds, tempPaths, hookServer, qrPath)
 
     tempPath = createTempFile(name, text.encode("utf-8"))
     tempPaths.append(tempPath)
@@ -541,8 +593,9 @@ def fflShareText(
         timeoutSeconds,
         effectiveHookUrl,
         proxy,
+        qrPath,
     )
-    return spawnFflAndWaitLink(args, None, waitLinkSeconds, tempPaths, hookServer)
+    return spawnFflAndWaitLink(args, None, waitLinkSeconds, tempPaths, hookServer, qrPath)
 
 
 @mcp.tool
@@ -557,12 +610,22 @@ def fflShareBase64(
     waitLinkSeconds: int = defaultWaitLinkSeconds,
     hookUrl: Optional[str] = None,
     proxy: Optional[str] = None,
+    generateQr: bool = False,
 ) -> Dict[str, Any]:
     """
     Share arbitrary base64 bytes using ffl. Returns a sessionId and link.
+    If generateQr is True, also returns a QR code as base64.
     """
     rawBytes = base64.b64decode(dataB64, validate=True)
     tempPaths: List[str] = []
+    qrPath = None
+
+    if generateQr:
+        qrTemp = tempfile.NamedTemporaryFile(prefix="ffl_qr_", suffix=".png", delete=False)
+        qrPath = qrTemp.name
+        qrTemp.close()
+        tempPaths.append(qrPath)
+
     hookInfo = startHookServerIfNeeded(hookUrl)
     hookServer = hookInfo["hookServer"]
     effectiveHookUrl = hookInfo["hookUrl"]
@@ -577,8 +640,9 @@ def fflShareBase64(
             timeoutSeconds,
             effectiveHookUrl,
             proxy,
+            qrPath,
         )
-        return spawnFflAndWaitLink(args, rawBytes, waitLinkSeconds, tempPaths, hookServer)
+        return spawnFflAndWaitLink(args, rawBytes, waitLinkSeconds, tempPaths, hookServer, qrPath)
 
     tempPath = createTempFile(name, rawBytes)
     tempPaths.append(tempPath)
@@ -592,8 +656,9 @@ def fflShareBase64(
         timeoutSeconds,
         effectiveHookUrl,
         proxy,
+        qrPath,
     )
-    return spawnFflAndWaitLink(args, None, waitLinkSeconds, tempPaths, hookServer)
+    return spawnFflAndWaitLink(args, None, waitLinkSeconds, tempPaths, hookServer, qrPath)
 
 
 @mcp.tool
@@ -607,15 +672,26 @@ def fflShareFile(
     waitLinkSeconds: int = defaultWaitLinkSeconds,
     hookUrl: Optional[str] = None,
     proxy: Optional[str] = None,
+    generateQr: bool = False,
 ) -> Dict[str, Any]:
     """
     Share a local file or folder using ffl. Respects ALLOWED_BASE_DIR when configured.
+    If generateQr is True, also returns a QR code as base64.
     """
     sharePath = pathlib.Path(path)
     if not sharePath.exists():
         raise FileNotFoundError(path)
     if not isPathAllowed(sharePath):
         raise PermissionError(f"Path not allowed by ALLOWED_BASE_DIR: {path}")
+
+    tempPaths: List[str] = []
+    qrPath = None
+
+    if generateQr:
+        qrTemp = tempfile.NamedTemporaryFile(prefix="ffl_qr_", suffix=".png", delete=False)
+        qrPath = qrTemp.name
+        qrTemp.close()
+        tempPaths.append(qrPath)
 
     hookInfo = startHookServerIfNeeded(hookUrl)
     hookServer = hookInfo["hookServer"]
@@ -630,8 +706,9 @@ def fflShareFile(
         timeoutSeconds,
         effectiveHookUrl,
         proxy,
+        qrPath,
     )
-    return spawnFflAndWaitLink(args, None, waitLinkSeconds, None, hookServer)
+    return spawnFflAndWaitLink(args, None, waitLinkSeconds, tempPaths, hookServer, qrPath)
 
 
 @mcp.tool

@@ -59,13 +59,15 @@ uvx --from git+https://github.com/nuwainfo/ffl-mcp install --config /path/to/cla
 
 ## Tools
 
-- `fflShareText(text, ...) -> {sessionId, link, ...}`
-- `fflShareBase64(dataB64, ...) -> {sessionId, link, ...}`
-- `fflShareFile(path, ...) -> {sessionId, link, ...}`
+- `fflShareText(text, ..., generateQr=False) -> {sessionId, link, qrCodeBase64?, ...}`
+- `fflShareBase64(dataB64, ..., generateQr=False) -> {sessionId, link, qrCodeBase64?, ...}`
+- `fflShareFile(path, ..., generateQr=False) -> {sessionId, link, qrCodeBase64?, ...}`
 - `fflListSessions()`
 - `fflStopSession(sessionId)`
 - `fflGetSession(sessionId)`
 - `fflGetSessionEvents(sessionId, limit=50)`
+
+All share functions support QR code generation via `generateQr=True`. When enabled, the response includes `qrCodeBase64` (PNG image as base64 string).
 
 ## Notes
 
@@ -73,3 +75,4 @@ uvx --from git+https://github.com/nuwainfo/ffl-mcp install --config /path/to/cla
 - `FFL_RUN_MODE=python` runs the Core.py CLI (requires `FFL_CORE_PATH`).
 - `--hook` and `--proxy` are passed through to ffl.
 - `FFL_USE_HOOK=1` starts a local webhook server and passes it to `ffl` for link/progress events.
+- `FFL_DEBUG=1` enables debug logging - ffl output is saved to a temp file with path returned in `debugLogPath`.
