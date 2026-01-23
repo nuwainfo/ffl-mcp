@@ -27,6 +27,8 @@ import tempfile
 import threading
 import time
 import uuid
+import platform
+
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import quote
@@ -521,6 +523,12 @@ def shouldUseShell(command: List[str]) -> bool:
         return True
     if not command:
         return False
+        
+    # On Windows, APE binaries (.com files) work fine without shell mode
+    # and using shell mode causes quoting issues with paths
+    if platform.system() == "Windows":
+        return False
+        
     return command[0].endswith(".com")
 
 
