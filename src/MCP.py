@@ -20,6 +20,7 @@ import json
 import logging
 import os
 import pathlib
+import re
 import shlex
 import subprocess
 import tempfile
@@ -821,6 +822,9 @@ def fflDownload(
     # Always capture output to detect transfer mode (WebRTC P2P vs HTTP fallback)
     logFile, logPath = setupDebugLogging(prefix="ffl_download_output_")
 
+    # Use current working directory instead of script directory for downloads
+    downloadCwd = os.getcwd()
+
     try:
         if useShell:
             commandText = shlex.join(command)
@@ -831,7 +835,7 @@ def fflDownload(
                 stderr=logFile,
                 text=True,
                 timeout=600,  # 10 minute timeout for downloads
-                cwd=os.path.dirname(__file__),
+                cwd=downloadCwd,
             )
         else:
             result = subprocess.run(
@@ -841,7 +845,7 @@ def fflDownload(
                 stderr=logFile,
                 text=True,
                 timeout=600,  # 10 minute timeout for downloads
-                cwd=os.path.dirname(__file__),
+                cwd=downloadCwd,
             )
 
         if logFile:
@@ -853,10 +857,7 @@ def fflDownload(
             "url": url,
         }
 
-        if outputPath:
-            response["outputPath"] = outputPath
-
-        # Detect transfer mode from output
+        # Detect transfer mode and extract output path from ffl output
         if logPath and os.path.exists(logPath):
             try:
                 with open(logPath, "r") as f:
@@ -882,8 +883,29 @@ def fflDownload(
                         response["transferInfo"] = "Downloaded via HTTP fallback (WebRTC connection failed)"
                     elif transferMode == "http_direct":
                         response["transferInfo"] = "Downloaded via HTTP (regular URL or WebRTC not supported)"
+
+                    # Extract actual output path from ffl output if not explicitly provided
+                    if not outputPath and result.returncode == 0:
+                        # Look for "Downloaded: filename" in output
+                        match = re.search(r"Downloaded:\s+(.+)$", output, re.MULTILINE)
+                        if match:
+                            filename = match.group(1).strip()
+                            # Convert to absolute path
+                            actualPath = os.path.join(downloadCwd, filename)
+                            response["outputPath"] = actualPath
+                        else:
+                            # Fallback: try to extract filename from "Downloading filename"
+                            match = re.search(r"Downloading\s+(.+?)\s+\(", output)
+                            if match:
+                                filename = match.group(1).strip()
+                                actualPath = os.path.join(downloadCwd, filename)
+                                response["outputPath"] = actualPath
             except Exception as exc:
-                logger.debug("Failed to detect transfer mode: %s", exc)
+                logger.debug("Failed to detect transfer mode or output path: %s", exc)
+
+        # If outputPath was explicitly provided, always use it (overrides parsed path)
+        if outputPath:
+            response["outputPath"] = os.path.abspath(outputPath)
 
         # Include log path for debugging (always, not just when FFL_DEBUG=1)
         if logPath:
