@@ -423,19 +423,29 @@ def main() -> None:
         backupPath = installer.backupConfig()
         installer.writeConfig(updatedConfig)
 
+    installedTargets = []
     if "claude-cli" in installTargets and getClaudeCliPath():
         print(f"Installed ffl-mcp into Claude Code CLI (scope: {args.cliScope}).")
+        installedTargets.append("claude-cli")
     if "codex-cli" in installTargets and getCodexCliPath():
         print("Installed ffl-mcp into Codex CLI.")
+        installedTargets.append("codex-cli")
     if "claude-desktop" in installTargets:
         print("Installed ffl-mcp into Claude Desktop config.")
         print(f"Config: {configPath}")
         if backupPath:
             print(f"Backup: {backupPath}")
-        
-    print("Next: restart Claude Desktop (or reload MCP servers if your client supports it).")
+        installedTargets.append("claude-desktop")
+
+    if "claude-desktop" in installedTargets:
+        print("\nNext: restart Claude Desktop (or reload MCP servers if your client supports it).")
+    elif "claude-cli" in installedTargets:
+        print("\nNext: restart Claude Code CLI (or reload MCP servers).")
+    elif "codex-cli" in installedTargets:
+        print("\nNext: restart Codex CLI (or reload MCP servers).")
+
     print(f"Server name: {args.serverName}")
-    
+
     if uvxFrom:
         print(f"uvx source: {uvxFrom}")
     else:

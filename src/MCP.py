@@ -28,7 +28,7 @@ import threading
 import time
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import quote
 
 from fastmcp import FastMCP
@@ -166,7 +166,23 @@ fflHookPath = os.environ.get("FFL_HOOK_PATH", "/events")
 fflHookUsername = os.environ.get("FFL_HOOK_USERNAME", "ffl-mcp")
 fflHookPassword = os.environ.get("FFL_HOOK_PASSWORD")
 fflHookMaxEvents = int(os.environ.get("FFL_HOOK_MAX_EVENTS", "200"))
-fflDebug = os.environ.get("FFL_DEBUG", "").lower() in ("1", "true", "yes")
+
+def parseFflDebug() -> Tuple[bool, Optional[str]]:
+    """
+    Parse FFL_DEBUG environment variable.
+    Returns (enabled, path) tuple.
+    - FFL_DEBUG=1 or FFL_DEBUG=true -> (True, None) - use temp file
+    - FFL_DEBUG=/path/to/log.txt -> (True, "/path/to/log.txt") - use specific path
+    - FFL_DEBUG not set or empty -> (False, None) - disabled
+    """
+    value = os.environ.get("FFL_DEBUG", "").strip()
+    if not value:
+        return False, None
+    if value.lower() in ("1", "true", "yes"):
+        return True, None
+    return True, value
+
+fflDebugEnabled, fflDebugPath = parseFflDebug()
 
 
 def parseBasicAuthHeader(headerValue: Optional[str]) -> Optional[Dict[str, str]]:
@@ -452,7 +468,7 @@ def waitForLink(jsonPath: str, waitSeconds: int, hookServer: Optional[HookServer
         errorMsg += "\n\nCheck your FFL_BIN/FFL_CORE_PATH configuration."
 
     # Add debug log hint if available
-    if fflDebug:
+    if fflDebugEnabled:
         errorMsg += "\n\nCheck the debug log (debugLogPath in response) for detailed error information."
 
     raise RuntimeError(errorMsg)
@@ -466,19 +482,27 @@ def createTempFile(fileName: str, data: bytes) -> str:
     return tempFile.name
 
 
-def setupDebugLogging(tempPaths: Optional[List[str]] = None, prefix: str = "ffl_debug_") -> tuple:
+def setupDebugLogging(tempPaths: Optional[List[str]] = None, prefix: str = "ffl_debug_", customPath: Optional[str] = None) -> Tuple[Any, str]:
     """
-    Create a temporary file for debug logging and open it for writing.
+    Create a file for debug logging and open it for writing.
+    If customPath is provided, uses that path instead of creating a temp file.
     Returns (logFile, logPath) tuple.
-    Adds the log path to tempPaths for cleanup if tempPaths is provided.
+    Adds the log path to tempPaths for cleanup if tempPaths is provided and customPath is None.
     """
-    logTemp = tempfile.NamedTemporaryFile(prefix=prefix, suffix=".log", delete=False, mode="w")
-    logPath = logTemp.name
-    logTemp.close()
-    if tempPaths is not None:
-        tempPaths.append(logPath)
-    logFile = open(logPath, "w")
-    logger.info("FFL_DEBUG=1: Logging ffl output to %s", logPath)
+    if customPath:
+        logPath = customPath
+        # Create parent directory if needed
+        pathlib.Path(logPath).parent.mkdir(parents=True, exist_ok=True)
+        logFile = open(logPath, "w")
+        logger.info("FFL_DEBUG=%s: Logging ffl output to %s", customPath, logPath)
+    else:
+        logTemp = tempfile.NamedTemporaryFile(prefix=prefix, suffix=".log", delete=False, mode="w")
+        logPath = logTemp.name
+        logTemp.close()
+        if tempPaths is not None:
+            tempPaths.append(logPath)
+        logFile = open(logPath, "w")
+        logger.info("FFL_DEBUG=1: Logging ffl output to %s", logPath)
     return logFile, logPath
 
 
@@ -524,7 +548,7 @@ def buildShareArgs(
         args += ["--hook", hookUrl]
     if proxy:
         args += ["--proxy", proxy]
-    if fflDebug:
+    if fflDebugEnabled:
         args += ["--log-level", "DEBUG"]
     return args
 
@@ -613,16 +637,18 @@ def spawnFflAndWaitLink(
     # Setup output capture (for debug or QR code)
     logFile = None
     logPath = None
-    captureOutput = fflDebug or qrInTerminal
+    captureOutput = fflDebugEnabled or qrInTerminal
     if captureOutput:
-        logTemp = tempfile.NamedTemporaryFile(prefix="ffl_output_", suffix=".log", delete=False, mode="w")
-        logPath = logTemp.name
-        logTemp.close()
-        tempPaths.append(logPath)
-        logFile = open(logPath, "w")
-        if fflDebug:
-            logger.info("FFL_DEBUG=1: Logging ffl output to %s", logPath)
+        if fflDebugEnabled:
+            # Use custom debug path if provided, otherwise create temp file
+            logFile, logPath = setupDebugLogging(tempPaths if not fflDebugPath else None, "ffl_output_", fflDebugPath)
         else:
+            # QR code capture only (not debug mode)
+            logTemp = tempfile.NamedTemporaryFile(prefix="ffl_output_", suffix=".log", delete=False, mode="w")
+            logPath = logTemp.name
+            logTemp.close()
+            tempPaths.append(logPath)
+            logFile = open(logPath, "w")
             logger.info("Capturing ffl output for QR code to %s", logPath)
 
     if useShell:
@@ -675,7 +701,7 @@ def spawnFflAndWaitLink(
                 logger.debug("Failed to stop hook server: %s", exc)
         for path in tempPaths:
             # Keep debug log files for troubleshooting
-            if fflDebug and path.endswith(".log"):
+            if fflDebugEnabled and path.endswith(".log"):
                 logger.info("Debug log preserved at: %s", path)
                 continue
             try:
@@ -715,7 +741,7 @@ def spawnFflAndWaitLink(
     if qrPath and os.path.exists(qrPath):
         result["qrCodePath"] = qrPath
 
-    if logPath and fflDebug:
+    if logPath and fflDebugEnabled:
         result["debugLogPath"] = logPath
 
     return result
@@ -852,7 +878,7 @@ def fflDownload(
     if proxy:
         command += ["--proxy", proxy]
 
-    if fflDebug:
+    if fflDebugEnabled:
         command += ["--log-level", "DEBUG"]
 
     useShell = shouldUseShell(command)
@@ -860,7 +886,8 @@ def fflDownload(
     logger.info("Starting ffl download: %s", shlex.join(command))
 
     # Always capture output to detect transfer mode (WebRTC P2P vs HTTP fallback)
-    logFile, logPath = setupDebugLogging(prefix="ffl_download_output_")
+    # Use custom debug path if provided, otherwise create temp file
+    logFile, logPath = setupDebugLogging(prefix="ffl_download_output_", customPath=fflDebugPath)
 
     # Use current working directory instead of script directory for downloads
     downloadCwd = os.getcwd()
@@ -949,7 +976,7 @@ def fflDownload(
 
         # Include log path for debugging (always, not just when FFL_DEBUG=1)
         if logPath:
-            if fflDebug:
+            if fflDebugEnabled:
                 response["debugLogPath"] = logPath
             else:
                 # Clean up log file if not in debug mode and download succeeded
