@@ -66,15 +66,23 @@ uvx --from git+https://github.com/nuwainfo/ffl-mcp install --config /path/to/cla
 
 ## Tools
 
+**Sharing:**
 - `fflShareText(text, ..., generateQr=False) -> {sessionId, link, qrCodeBase64?, ...}`
 - `fflShareBase64(dataB64, ..., generateQr=False) -> {sessionId, link, qrCodeBase64?, ...}`
 - `fflShareFile(path, ..., generateQr=False) -> {sessionId, link, qrCodeBase64?, ...}`
+
+All share functions support QR code generation via `generateQr=True`. When enabled, the response includes `qrCodeBase64` (PNG image as base64 string).
+
+**Downloading:**
+- `fflDownload(url, outputPath?, resume?, ...) -> {ok, returncode, outputPath?, message?, ...}`
+
+Downloads from FastFileLink URLs (uses WebRTC P2P) or regular HTTP(S) URLs (works like wget).
+
+**Session Management:**
 - `fflListSessions()`
 - `fflStopSession(sessionId)`
 - `fflGetSession(sessionId)`
 - `fflGetSessionEvents(sessionId, limit=50)`
-
-All share functions support QR code generation via `generateQr=True`. When enabled, the response includes `qrCodeBase64` (PNG image as base64 string).
 
 ## Notes
 

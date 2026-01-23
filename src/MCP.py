@@ -411,6 +411,35 @@ def createTempFile(fileName: str, data: bytes) -> str:
     return tempFile.name
 
 
+def setupQrCodePath(tempPaths: List[str]) -> Optional[str]:
+    """
+    Create a temporary file for QR code generation.
+    Returns the path to the QR code file, or None if not needed.
+    Adds the path to tempPaths for cleanup.
+    """
+    qrTemp = tempfile.NamedTemporaryFile(prefix="ffl_qr_", suffix=".png", delete=False)
+    qrPath = qrTemp.name
+    qrTemp.close()
+    tempPaths.append(qrPath)
+    return qrPath
+
+
+def setupDebugLogging(tempPaths: Optional[List[str]] = None, prefix: str = "ffl_debug_") -> tuple:
+    """
+    Create a temporary file for debug logging and open it for writing.
+    Returns (logFile, logPath) tuple.
+    Adds the log path to tempPaths for cleanup if tempPaths is provided.
+    """
+    logTemp = tempfile.NamedTemporaryFile(prefix=prefix, suffix=".log", delete=False, mode="w")
+    logPath = logTemp.name
+    logTemp.close()
+    if tempPaths is not None:
+        tempPaths.append(logPath)
+    logFile = open(logPath, "w")
+    logger.info("FFL_DEBUG=1: Logging ffl output to %s", logPath)
+    return logFile, logPath
+
+
 def buildBaseCommand() -> List[str]:
     if fflCommandOverride:
         return shlex.split(fflCommandOverride)
@@ -616,13 +645,7 @@ def fflShareText(
     If generateQr is True, also returns a QR code as base64.
     """
     tempPaths: List[str] = []
-    qrPath = None
-
-    if generateQr:
-        qrTemp = tempfile.NamedTemporaryFile(prefix="ffl_qr_", suffix=".png", delete=False)
-        qrPath = qrTemp.name
-        qrTemp.close()
-        tempPaths.append(qrPath)
+    qrPath = setupQrCodePath(tempPaths) if generateQr else None
 
     hookInfo = startHookServerIfNeeded(hookUrl)
     hookServer = hookInfo["hookServer"]
@@ -679,13 +702,7 @@ def fflShareBase64(
     """
     rawBytes = base64.b64decode(dataB64, validate=True)
     tempPaths: List[str] = []
-    qrPath = None
-
-    if generateQr:
-        qrTemp = tempfile.NamedTemporaryFile(prefix="ffl_qr_", suffix=".png", delete=False)
-        qrPath = qrTemp.name
-        qrTemp.close()
-        tempPaths.append(qrPath)
+    qrPath = setupQrCodePath(tempPaths) if generateQr else None
 
     hookInfo = startHookServerIfNeeded(hookUrl)
     hookServer = hookInfo["hookServer"]
@@ -746,13 +763,7 @@ def fflShareFile(
         raise PermissionError(f"Path not allowed by ALLOWED_BASE_DIR: {path}")
 
     tempPaths: List[str] = []
-    qrPath = None
-
-    if generateQr:
-        qrTemp = tempfile.NamedTemporaryFile(prefix="ffl_qr_", suffix=".png", delete=False)
-        qrPath = qrTemp.name
-        qrTemp.close()
-        tempPaths.append(qrPath)
+    qrPath = setupQrCodePath(tempPaths) if generateQr else None
 
     hookInfo = startHookServerIfNeeded(hookUrl)
     hookServer = hookInfo["hookServer"]
@@ -770,6 +781,136 @@ def fflShareFile(
         qrPath,
     )
     return spawnFflAndWaitLink(args, None, waitLinkSeconds, tempPaths, hookServer, qrPath)
+
+
+@mcp.tool
+def fflDownload(
+    url: str,
+    outputPath: Optional[str] = None,
+    resume: bool = False,
+    authUser: Optional[str] = None,
+    authPassword: Optional[str] = None,
+    proxy: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Download a file from a FastFileLink URL or regular HTTP(S) URL using ffl.
+
+    For FastFileLink URLs, this uses WebRTC P2P when possible for faster downloads.
+    For regular URLs, it works like wget.
+
+    Args:
+        url: FastFileLink URL or regular HTTP(S) URL to download from
+        outputPath: Optional output file path (default: use filename from server)
+        resume: Resume incomplete download (default: False)
+        authUser: Username for HTTP Basic Authentication
+        authPassword: Password for HTTP Basic Authentication
+        proxy: Proxy server for connections
+
+    Returns:
+        Dictionary with download status and output file path
+    """
+    command = buildBaseCommand() + ["download", url]
+
+    if outputPath:
+        command += ["--output", outputPath]
+
+    if resume:
+        command.append("--resume")
+
+    if authUser:
+        command += ["--auth-user", authUser]
+
+    if authPassword:
+        command += ["--auth-password", authPassword]
+
+    if proxy:
+        command += ["--proxy", proxy]
+
+    if fflDebug:
+        command += ["--log-level", "DEBUG"]
+
+    useShell = shouldUseShell(command)
+
+    logger.info("Starting ffl download: %s", shlex.join(command))
+
+    # Setup debug logging
+    logFile = None
+    logPath = None
+    if fflDebug:
+        logFile, logPath = setupDebugLogging(prefix="ffl_download_debug_")
+
+    try:
+        if useShell:
+            commandText = shlex.join(command)
+            result = subprocess.run(
+                commandText,
+                shell=True,
+                stdout=logFile if logFile else subprocess.PIPE,
+                stderr=logFile if logFile else subprocess.PIPE,
+                text=True,
+                timeout=600,  # 10 minute timeout for downloads
+                cwd=os.path.dirname(__file__),
+            )
+        else:
+            result = subprocess.run(
+                command,
+                shell=False,
+                stdout=logFile if logFile else subprocess.PIPE,
+                stderr=logFile if logFile else subprocess.PIPE,
+                text=True,
+                timeout=600,  # 10 minute timeout for downloads
+                cwd=os.path.dirname(__file__),
+            )
+
+        if logFile:
+            logFile.close()
+
+        response = {
+            "ok": result.returncode == 0,
+            "returncode": result.returncode,
+            "url": url,
+        }
+
+        if outputPath:
+            response["outputPath"] = outputPath
+
+        if logPath:
+            response["debugLogPath"] = logPath
+
+        if result.returncode != 0:
+            errorMsg = "Download failed"
+            if result.stderr and not logFile:
+                errorMsg += f": {result.stderr.strip()}"
+
+            # Check for WSL interop issue
+            wslInteropMsg = checkWSLInteropIssue()
+            if wslInteropMsg:
+                errorMsg += f"\n\n{wslInteropMsg}"
+
+            response["error"] = errorMsg
+        else:
+            response["message"] = "Download completed successfully"
+
+        return response
+
+    except subprocess.TimeoutExpired:
+        if logFile:
+            logFile.close()
+        return {
+            "ok": False,
+            "error": "Download timed out after 10 minutes",
+            "url": url,
+            "debugLogPath": logPath if logPath else None,
+        }
+    except Exception as exc:
+        if logFile:
+            logFile.close()
+        return {
+            "ok": False,
+            "error": f"Download failed: {str(exc)}",
+            "url": url,
+            "debugLogPath": logPath if logPath else None,
+        }
 
 
 @mcp.tool
