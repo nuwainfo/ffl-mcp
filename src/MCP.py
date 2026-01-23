@@ -39,6 +39,10 @@ logger.setLevel(logging.DEBUG)
 
 mcp = FastMCP("ffl-mcp")
 
+ansiEscapePattern = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+qrBlockChars = ("█", "▀", "▄")
+boxDrawingChars = set("─│┌┐└┘├┤┬┴┼═║╔╗╚╝╠╣╦╩╬")
+
 
 def isRunningInWSL() -> bool:
     """Check if running in WSL (Windows Subsystem for Linux)"""
@@ -87,6 +91,56 @@ def checkWSLInteropIssue() -> Optional[str]:
         "If WSLInterop doesn't exist, try restarting your WSL session.\n"
         "Alternatively, use FFL_RUN_MODE=python with FFL_CORE_PATH pointing to the ffl Core.py file."
     )
+
+
+def stripAnsiSequences(text: str) -> str:
+    return ansiEscapePattern.sub("", text)
+
+
+def isQrOutputLine(line: str) -> bool:
+    cleanLine = stripAnsiSequences(line)
+    return any(char in cleanLine for char in qrBlockChars)
+
+
+def isBoxDrawingLine(line: str) -> bool:
+    cleanLine = stripAnsiSequences(line).strip()
+    if not cleanLine:
+        return False
+    return all(char in boxDrawingChars for char in cleanLine)
+
+
+def extractQrCodeFromOutput(output: str) -> Optional[str]:
+    lines = output.splitlines()
+    if not lines:
+        return None
+
+    spans = []
+    spanStart = None
+    for index, line in enumerate(lines):
+        if isQrOutputLine(line):
+            if spanStart is None:
+                spanStart = index
+        elif spanStart is not None:
+            spans.append((spanStart, index))
+            spanStart = None
+
+    if spanStart is not None:
+        spans.append((spanStart, len(lines)))
+
+    if not spans:
+        return None
+
+    spanStart, spanEnd = max(spans, key=lambda item: item[1] - item[0])
+    qrLines = []
+    for line in lines[spanStart:spanEnd]:
+        if isBoxDrawingLine(line):
+            continue
+        qrLines.append(line.rstrip("\r"))
+
+    if not qrLines:
+        return None
+
+    return "\n".join(qrLines)
 
 def resolveDefaultFflBin() -> str:
     localFfl = pathlib.Path(__file__).resolve().parent / "ffl.com"
@@ -651,23 +705,9 @@ def spawnFflAndWaitLink(
         try:
             with open(logPath, "r") as f:
                 output = f.read()
-                # Extract QR code ASCII art from output
-                # QR code is typically between "QR Code:" and the link display
-                qrLines = []
-                inQr = False
-                for line in output.split("\n"):
-                    # Detect QR code start (lines with box drawing characters)
-                    if "█" in line or "▀" in line or "▄" in line:
-                        inQr = True
-                        qrLines.append(line)
-                    elif inQr and line.strip():
-                        qrLines.append(line)
-                    elif inQr and not line.strip() and qrLines:
-                        # Empty line after QR means it ended
-                        break
-
-                if qrLines:
-                    result["qrCode"] = "\n".join(qrLines)
+                qrCode = extractQrCodeFromOutput(output)
+                if qrCode:
+                    result["qrCode"] = qrCode
         except Exception as exc:
             logger.debug("Failed to extract QR code from output: %s", exc)
 
