@@ -6,6 +6,8 @@ Backed by [ffl](https://github.com/nuwainfo/ffl), which turns any file/folder in
 This is a minimal MCP server that shells out to `ffl` / `ffl.com` locally.
 No file contents are sent to the LLM; the model only triggers local `ffl`.
 
+This demo shows collaborative debugging: Claude on the left shares a local environment (DB + logs) via P2P link, Claude on the right downloads and diagnoses the error.
+
 ![ffl-mcp-demo](https://github.com/user-attachments/assets/522aa8bb-e151-4613-9b43-aac67a596d1a)
 
 ## Run (no PyPI, run directly from Git)
