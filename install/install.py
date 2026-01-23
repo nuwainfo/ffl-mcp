@@ -372,12 +372,9 @@ def main() -> None:
     if "FFL_USE_STDIN" not in env:
         env["FFL_USE_STDIN"] = "1"
 
-    if "ALLOWED_BASE_DIR" not in env and not args.assumeYes:
+    if "ALLOWED_BASE_DIR" not in env:
         print("Warning: ALLOWED_BASE_DIR is not set. This allows sharing any path.")
         print("Recommended: set --allowed-base-dir to restrict file sharing.")
-        response = input("Continue without ALLOWED_BASE_DIR? [y/N]: ").strip().lower()
-        if response not in ("y", "yes"):
-            raise SystemExit(1)
 
     name, entry = buildMcpServerEntry(args.serverName, uvxFrom, args.entrypoint, env)
 
