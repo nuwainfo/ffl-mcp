@@ -67,16 +67,23 @@ uvx --from git+https://github.com/nuwainfo/ffl-mcp install --config /path/to/cla
 ## Tools
 
 **Sharing:**
-- `fflShareText(text, ..., generateQr=False) -> {sessionId, link, qrCodeBase64?, ...}`
-- `fflShareBase64(dataB64, ..., generateQr=False) -> {sessionId, link, qrCodeBase64?, ...}`
-- `fflShareFile(path, ..., generateQr=False) -> {sessionId, link, qrCodeBase64?, ...}`
+- `fflShareText(text, ..., e2ee=True, qrInTerminal=False) -> {sessionId, link, qrCode?, ...}`
+- `fflShareBase64(dataB64, ..., e2ee=True, qrInTerminal=False) -> {sessionId, link, qrCode?, ...}`
+- `fflShareFile(path, ..., e2ee=True, qrInTerminal=False) -> {sessionId, link, qrCode?, ...}`
 
-All share functions support QR code generation via `generateQr=True`. When enabled, the response includes `qrCodeBase64` (PNG image as base64 string).
+All share functions use **end-to-end encryption (E2EE) by default** for security. Set `e2ee=False` to disable if needed.
+
+Set `qrInTerminal=True` to get a scannable ASCII QR code in the response (displayed as terminal art, not base64 PNG).
 
 **Downloading:**
-- `fflDownload(url, outputPath?, resume?, ...) -> {ok, returncode, outputPath?, message?, ...}`
+- `fflDownload(url, outputPath?, resume?, ...) -> {ok, returncode, outputPath?, transferMode?, transferInfo?, message?, ...}`
 
-Downloads from FastFileLink URLs (uses WebRTC P2P) or regular HTTP(S) URLs (works like wget).
+Downloads from FastFileLink URLs (uses **WebRTC P2P when possible**, falls back to HTTP) or regular HTTP(S) URLs (works like wget).
+
+Returns transfer mode information:
+- `webrtc_p2p`: Fast direct peer-to-peer connection
+- `http_fallback`: HTTP relay (when WebRTC fails)
+- `http_direct`: Direct HTTP download (non-FastFileLink URLs)
 
 **Session Management:**
 - `fflListSessions()`

@@ -411,19 +411,6 @@ def createTempFile(fileName: str, data: bytes) -> str:
     return tempFile.name
 
 
-def setupQrCodePath(tempPaths: List[str]) -> Optional[str]:
-    """
-    Create a temporary file for QR code generation.
-    Returns the path to the QR code file, or None if not needed.
-    Adds the path to tempPaths for cleanup.
-    """
-    qrTemp = tempfile.NamedTemporaryFile(prefix="ffl_qr_", suffix=".png", delete=False)
-    qrPath = qrTemp.name
-    qrTemp.close()
-    tempPaths.append(qrPath)
-    return qrPath
-
-
 def setupDebugLogging(tempPaths: Optional[List[str]] = None, prefix: str = "ffl_debug_") -> tuple:
     """
     Create a temporary file for debug logging and open it for writing.
@@ -468,7 +455,6 @@ def buildShareArgs(
     timeoutSeconds: int,
     hookUrl: Optional[str],
     proxy: Optional[str],
-    qrPath: Optional[str],
 ) -> List[str]:
     args = [shareTarget, "--max-downloads", str(maxDownloads), "--timeout", str(timeoutSeconds)]
     if name:
@@ -483,8 +469,6 @@ def buildShareArgs(
         args += ["--hook", hookUrl]
     if proxy:
         args += ["--proxy", proxy]
-    if qrPath:
-        args += ["--qr", qrPath]
     if fflDebug:
         args += ["--log-level", "DEBUG"]
     return args
@@ -506,6 +490,44 @@ def startHookServerIfNeeded(hookUrl: Optional[str]) -> Dict[str, Any]:
     return {"hookServer": hookServer, "hookUrl": hookServer.getHookUrl()}
 
 
+def shareWithFfl(
+    shareTarget: str,
+    stdinBytes: Optional[bytes],
+    tempPaths: List[str],
+    name: Optional[str],
+    e2ee: bool,
+    authUser: Optional[str],
+    authPassword: Optional[str],
+    maxDownloads: int,
+    timeoutSeconds: int,
+    waitLinkSeconds: int,
+    hookUrl: Optional[str],
+    proxy: Optional[str],
+    qrInTerminal: bool,
+) -> Dict[str, Any]:
+    """
+    Common sharing logic for all share functions.
+    Handles hook server initialization, argument building, and process spawning.
+    """
+    hookInfo = startHookServerIfNeeded(hookUrl)
+    hookServer = hookInfo["hookServer"]
+    effectiveHookUrl = hookInfo["hookUrl"]
+
+    args = buildShareArgs(
+        shareTarget,
+        name,
+        e2ee,
+        authUser,
+        authPassword,
+        maxDownloads,
+        timeoutSeconds,
+        effectiveHookUrl,
+        proxy,
+    )
+
+    return spawnFflAndWaitLink(args, stdinBytes, waitLinkSeconds, tempPaths, hookServer, None, qrInTerminal)
+
+
 def spawnFflAndWaitLink(
     fflArgs: List[str],
     stdinBytes: Optional[bytes],
@@ -513,6 +535,7 @@ def spawnFflAndWaitLink(
     tempPaths: Optional[List[str]] = None,
     hookServer: Optional[HookServer] = None,
     qrPath: Optional[str] = None,
+    qrInTerminal: bool = False,
 ) -> Dict[str, Any]:
     tempPaths = tempPaths or []
     jsonTemp = tempfile.NamedTemporaryFile(prefix="ffl_", suffix=".json", delete=False)
@@ -521,20 +544,31 @@ def spawnFflAndWaitLink(
     tempPaths.append(jsonPath)
 
     command = buildBaseCommand() + fflArgs + ["--json", jsonPath]
+
+    # Add QR code options
+    if qrPath:
+        command += ["--qr", qrPath]
+    elif qrInTerminal:
+        command += ["--qr"]
+
     useShell = shouldUseShell(command)
 
     logger.info("Starting ffl: %s", shlex.join(command))
 
-    # Setup debug logging
+    # Setup output capture (for debug or QR code)
     logFile = None
     logPath = None
-    if fflDebug:
-        logTemp = tempfile.NamedTemporaryFile(prefix="ffl_debug_", suffix=".log", delete=False, mode="w")
+    captureOutput = fflDebug or qrInTerminal
+    if captureOutput:
+        logTemp = tempfile.NamedTemporaryFile(prefix="ffl_output_", suffix=".log", delete=False, mode="w")
         logPath = logTemp.name
         logTemp.close()
         tempPaths.append(logPath)
         logFile = open(logPath, "w")
-        logger.info("FFL_DEBUG=1: Logging ffl output to %s", logPath)
+        if fflDebug:
+            logger.info("FFL_DEBUG=1: Logging ffl output to %s", logPath)
+        else:
+            logger.info("Capturing ffl output for QR code to %s", logPath)
 
     if useShell:
         commandText = shlex.join(command)
@@ -611,16 +645,36 @@ def spawnFflAndWaitLink(
 
     result = {"sessionId": sessionId, "link": link, "pid": process.pid, "jsonPath": jsonPath, "cmd": command}
 
-    if qrPath and os.path.exists(qrPath):
+    # Handle QR code in terminal mode
+    if qrInTerminal and logPath and os.path.exists(logPath):
         try:
-            with open(qrPath, "rb") as qrFile:
-                qrData = qrFile.read()
-                result["qrCodeBase64"] = base64.b64encode(qrData).decode("utf-8")
-                result["qrCodePath"] = qrPath
-        except Exception as exc:
-            logger.debug("Failed to read QR code file %s: %s", qrPath, exc)
+            with open(logPath, "r") as f:
+                output = f.read()
+                # Extract QR code ASCII art from output
+                # QR code is typically between "QR Code:" and the link display
+                qrLines = []
+                inQr = False
+                for line in output.split("\n"):
+                    # Detect QR code start (lines with box drawing characters)
+                    if "█" in line or "▀" in line or "▄" in line:
+                        inQr = True
+                        qrLines.append(line)
+                    elif inQr and line.strip():
+                        qrLines.append(line)
+                    elif inQr and not line.strip() and qrLines:
+                        # Empty line after QR means it ended
+                        break
 
-    if logPath:
+                if qrLines:
+                    result["qrCode"] = "\n".join(qrLines)
+        except Exception as exc:
+            logger.debug("Failed to extract QR code from output: %s", exc)
+
+    # Keep QR code PNG path if generated
+    if qrPath and os.path.exists(qrPath):
+        result["qrCodePath"] = qrPath
+
+    if logPath and fflDebug:
         result["debugLogPath"] = logPath
 
     return result
@@ -630,7 +684,7 @@ def spawnFflAndWaitLink(
 def fflShareText(
     text: str,
     name: str = "shared.txt",
-    e2ee: bool = False,
+    e2ee: bool = True,
     authUser: Optional[str] = None,
     authPassword: Optional[str] = None,
     maxDownloads: int = 1,
@@ -638,55 +692,29 @@ def fflShareText(
     waitLinkSeconds: int = defaultWaitLinkSeconds,
     hookUrl: Optional[str] = None,
     proxy: Optional[str] = None,
-    generateQr: bool = False,
+    qrInTerminal: bool = False,
 ) -> Dict[str, Any]:
     """
     Share a short text using ffl. Returns a sessionId and link.
-    If generateQr is True, also returns a QR code as base64.
+    E2EE encryption is enabled by default for security. Set e2ee=False to disable.
+    If qrInTerminal is True, also returns a QR code as ASCII art for terminal display.
     """
+    textBytes = text.encode("utf-8")
     tempPaths: List[str] = []
-    qrPath = setupQrCodePath(tempPaths) if generateQr else None
 
-    hookInfo = startHookServerIfNeeded(hookUrl)
-    hookServer = hookInfo["hookServer"]
-    effectiveHookUrl = hookInfo["hookUrl"]
     if fflUseStdin:
-        args = buildShareArgs(
-            "-",
-            name,
-            e2ee,
-            authUser,
-            authPassword,
-            maxDownloads,
-            timeoutSeconds,
-            effectiveHookUrl,
-            proxy,
-            qrPath,
-        )
-        return spawnFflAndWaitLink(args, text.encode("utf-8"), waitLinkSeconds, tempPaths, hookServer, qrPath)
+        return shareWithFfl("-", textBytes, tempPaths, name, e2ee, authUser, authPassword, maxDownloads, timeoutSeconds, waitLinkSeconds, hookUrl, proxy, qrInTerminal)
 
-    tempPath = createTempFile(name, text.encode("utf-8"))
+    tempPath = createTempFile(name, textBytes)
     tempPaths.append(tempPath)
-    args = buildShareArgs(
-        tempPath,
-        name,
-        e2ee,
-        authUser,
-        authPassword,
-        maxDownloads,
-        timeoutSeconds,
-        effectiveHookUrl,
-        proxy,
-        qrPath,
-    )
-    return spawnFflAndWaitLink(args, None, waitLinkSeconds, tempPaths, hookServer, qrPath)
+    return shareWithFfl(tempPath, None, tempPaths, name, e2ee, authUser, authPassword, maxDownloads, timeoutSeconds, waitLinkSeconds, hookUrl, proxy, qrInTerminal)
 
 
 @mcp.tool
 def fflShareBase64(
     dataB64: str,
     name: str = "data.bin",
-    e2ee: bool = False,
+    e2ee: bool = True,
     authUser: Optional[str] = None,
     authPassword: Optional[str] = None,
     maxDownloads: int = 1,
@@ -694,55 +722,28 @@ def fflShareBase64(
     waitLinkSeconds: int = defaultWaitLinkSeconds,
     hookUrl: Optional[str] = None,
     proxy: Optional[str] = None,
-    generateQr: bool = False,
+    qrInTerminal: bool = False,
 ) -> Dict[str, Any]:
     """
     Share arbitrary base64 bytes using ffl. Returns a sessionId and link.
-    If generateQr is True, also returns a QR code as base64.
+    E2EE encryption is enabled by default for security. Set e2ee=False to disable.
+    If qrInTerminal is True, also returns a QR code as ASCII art for terminal display.
     """
     rawBytes = base64.b64decode(dataB64, validate=True)
     tempPaths: List[str] = []
-    qrPath = setupQrCodePath(tempPaths) if generateQr else None
 
-    hookInfo = startHookServerIfNeeded(hookUrl)
-    hookServer = hookInfo["hookServer"]
-    effectiveHookUrl = hookInfo["hookUrl"]
     if fflUseStdin:
-        args = buildShareArgs(
-            "-",
-            name,
-            e2ee,
-            authUser,
-            authPassword,
-            maxDownloads,
-            timeoutSeconds,
-            effectiveHookUrl,
-            proxy,
-            qrPath,
-        )
-        return spawnFflAndWaitLink(args, rawBytes, waitLinkSeconds, tempPaths, hookServer, qrPath)
+        return shareWithFfl("-", rawBytes, tempPaths, name, e2ee, authUser, authPassword, maxDownloads, timeoutSeconds, waitLinkSeconds, hookUrl, proxy, qrInTerminal)
 
     tempPath = createTempFile(name, rawBytes)
     tempPaths.append(tempPath)
-    args = buildShareArgs(
-        tempPath,
-        name,
-        e2ee,
-        authUser,
-        authPassword,
-        maxDownloads,
-        timeoutSeconds,
-        effectiveHookUrl,
-        proxy,
-        qrPath,
-    )
-    return spawnFflAndWaitLink(args, None, waitLinkSeconds, tempPaths, hookServer, qrPath)
+    return shareWithFfl(tempPath, None, tempPaths, name, e2ee, authUser, authPassword, maxDownloads, timeoutSeconds, waitLinkSeconds, hookUrl, proxy, qrInTerminal)
 
 
 @mcp.tool
 def fflShareFile(
     path: str,
-    e2ee: bool = False,
+    e2ee: bool = True,
     authUser: Optional[str] = None,
     authPassword: Optional[str] = None,
     maxDownloads: int = 1,
@@ -750,11 +751,12 @@ def fflShareFile(
     waitLinkSeconds: int = defaultWaitLinkSeconds,
     hookUrl: Optional[str] = None,
     proxy: Optional[str] = None,
-    generateQr: bool = False,
+    qrInTerminal: bool = False,
 ) -> Dict[str, Any]:
     """
     Share a local file or folder using ffl. Respects ALLOWED_BASE_DIR when configured.
-    If generateQr is True, also returns a QR code as base64.
+    E2EE encryption is enabled by default for security. Set e2ee=False to disable.
+    If qrInTerminal is True, also returns a QR code as ASCII art for terminal display.
     """
     sharePath = pathlib.Path(path)
     if not sharePath.exists():
@@ -763,24 +765,7 @@ def fflShareFile(
         raise PermissionError(f"Path not allowed by ALLOWED_BASE_DIR: {path}")
 
     tempPaths: List[str] = []
-    qrPath = setupQrCodePath(tempPaths) if generateQr else None
-
-    hookInfo = startHookServerIfNeeded(hookUrl)
-    hookServer = hookInfo["hookServer"]
-    effectiveHookUrl = hookInfo["hookUrl"]
-    args = buildShareArgs(
-        str(sharePath),
-        None,
-        e2ee,
-        authUser,
-        authPassword,
-        maxDownloads,
-        timeoutSeconds,
-        effectiveHookUrl,
-        proxy,
-        qrPath,
-    )
-    return spawnFflAndWaitLink(args, None, waitLinkSeconds, tempPaths, hookServer, qrPath)
+    return shareWithFfl(str(sharePath), None, tempPaths, None, e2ee, authUser, authPassword, maxDownloads, timeoutSeconds, waitLinkSeconds, hookUrl, proxy, qrInTerminal)
 
 
 @mcp.tool
@@ -833,11 +818,8 @@ def fflDownload(
 
     logger.info("Starting ffl download: %s", shlex.join(command))
 
-    # Setup debug logging
-    logFile = None
-    logPath = None
-    if fflDebug:
-        logFile, logPath = setupDebugLogging(prefix="ffl_download_debug_")
+    # Always capture output to detect transfer mode (WebRTC P2P vs HTTP fallback)
+    logFile, logPath = setupDebugLogging(prefix="ffl_download_output_")
 
     try:
         if useShell:
@@ -845,8 +827,8 @@ def fflDownload(
             result = subprocess.run(
                 commandText,
                 shell=True,
-                stdout=logFile if logFile else subprocess.PIPE,
-                stderr=logFile if logFile else subprocess.PIPE,
+                stdout=logFile,
+                stderr=logFile,
                 text=True,
                 timeout=600,  # 10 minute timeout for downloads
                 cwd=os.path.dirname(__file__),
@@ -855,8 +837,8 @@ def fflDownload(
             result = subprocess.run(
                 command,
                 shell=False,
-                stdout=logFile if logFile else subprocess.PIPE,
-                stderr=logFile if logFile else subprocess.PIPE,
+                stdout=logFile,
+                stderr=logFile,
                 text=True,
                 timeout=600,  # 10 minute timeout for downloads
                 cwd=os.path.dirname(__file__),
@@ -874,13 +856,60 @@ def fflDownload(
         if outputPath:
             response["outputPath"] = outputPath
 
+        # Detect transfer mode from output
+        if logPath and os.path.exists(logPath):
+            try:
+                with open(logPath, "r") as f:
+                    output = f.read()
+                    transferMode = "unknown"
+
+                    # Check for WebRTC P2P indicators
+                    if "P2P direct" in output or "WebRTC P2P" in output:
+                        transferMode = "webrtc_p2p"
+                    # Check for HTTP fallback indicators
+                    elif "HTTP fallback" in output:
+                        transferMode = "http_fallback"
+                    # Check for direct HTTP download (not FastFileLink)
+                    elif "HTTP download" in output or "downloading directly via HTTP" in output or "WebRTC not supported" in output:
+                        transferMode = "http_direct"
+
+                    response["transferMode"] = transferMode
+
+                    # Add user-friendly message
+                    if transferMode == "webrtc_p2p":
+                        response["transferInfo"] = "Downloaded via WebRTC P2P (fast, direct connection)"
+                    elif transferMode == "http_fallback":
+                        response["transferInfo"] = "Downloaded via HTTP fallback (WebRTC connection failed)"
+                    elif transferMode == "http_direct":
+                        response["transferInfo"] = "Downloaded via HTTP (regular URL or WebRTC not supported)"
+            except Exception as exc:
+                logger.debug("Failed to detect transfer mode: %s", exc)
+
+        # Include log path for debugging (always, not just when FFL_DEBUG=1)
         if logPath:
-            response["debugLogPath"] = logPath
+            if fflDebug:
+                response["debugLogPath"] = logPath
+            else:
+                # Clean up log file if not in debug mode and download succeeded
+                if result.returncode == 0:
+                    try:
+                        os.remove(logPath)
+                    except Exception as exc:
+                        logger.debug("Failed to remove download log: %s", exc)
 
         if result.returncode != 0:
             errorMsg = "Download failed"
-            if result.stderr and not logFile:
-                errorMsg += f": {result.stderr.strip()}"
+            # Read error from log file
+            if logPath and os.path.exists(logPath):
+                try:
+                    with open(logPath, "r") as f:
+                        logContent = f.read()
+                        # Extract last few lines for error message
+                        lines = [l for l in logContent.split("\n") if l.strip()]
+                        if lines:
+                            errorMsg += f": {lines[-1]}"
+                except Exception:
+                    pass
 
             # Check for WSL interop issue
             wslInteropMsg = checkWSLInteropIssue()
@@ -888,6 +917,9 @@ def fflDownload(
                 errorMsg += f"\n\n{wslInteropMsg}"
 
             response["error"] = errorMsg
+            # Keep log file on error for debugging
+            if logPath:
+                response["errorLogPath"] = logPath
         else:
             response["message"] = "Download completed successfully"
 
