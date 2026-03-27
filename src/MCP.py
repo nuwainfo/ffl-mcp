@@ -30,7 +30,7 @@ import uuid
 import platform
 
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 from urllib.parse import quote
 
 from fastmcp import FastMCP
@@ -533,7 +533,7 @@ def shouldUseShell(command: List[str]) -> bool:
 
 
 def buildShareArgs(
-    shareTarget: str,
+    shareTarget: Union[str, List[str]],
     name: Optional[str],
     e2ee: bool,
     authUser: Optional[str],
@@ -542,16 +542,64 @@ def buildShareArgs(
     timeoutSeconds: int,
     hookUrl: Optional[str],
     proxy: Optional[str],
+    exclude: Optional[str] = None,
+    recipientAuth: Optional[str] = None,
+    pickupCode: Optional[str] = None,
+    recipientPublicKey: Optional[str] = None,
+    recipientEmail: Optional[str] = None,
+    alias: Optional[str] = None,
+    receipt: Optional[str] = None,
+    receiptConfirm: Optional[str] = None,
+    forceRelay: bool = False,
+    upload: Optional[str] = None,
+    resumeUpload: bool = False,
+    vfs: bool = False,
+    preferredTunnel: Optional[str] = None,
 ) -> List[str]:
-    args = [shareTarget, "--max-downloads", str(maxDownloads), "--timeout", str(timeoutSeconds)]
+    args = list(shareTarget) if isinstance(shareTarget, list) else [shareTarget]
+    # --max-downloads and --timeout are P2P-only; skip them when uploading to server
+    if not upload:
+        args += ["--max-downloads", str(maxDownloads), "--timeout", str(timeoutSeconds)]
     if name:
         args += ["--name", name]
     if e2ee:
         args.append("--e2ee")
+    if upload:
+        args += ["--upload", upload]
+    if resumeUpload:
+        args.append("--resume")
+    if exclude:
+        args += ["--exclude", exclude]
     if authUser:
         args += ["--auth-user", authUser]
     if authPassword:
         args += ["--auth-password", authPassword]
+    if recipientAuth:
+        args += ["--recipient-auth", recipientAuth]
+    if pickupCode:
+        args += ["--pickup-code", pickupCode]
+    if recipientPublicKey:
+        args += ["--recipient-public-key", recipientPublicKey]
+    if recipientEmail:
+        args += ["--recipient-email", recipientEmail]
+    if alias:
+        args += ["--alias", alias]
+    if receipt is not None:
+        if receipt:
+            args += ["--receipt", receipt]
+        else:
+            args.append("--receipt")
+    if receiptConfirm is not None:
+        if receiptConfirm:
+            args += ["--receipt-confirm", receiptConfirm]
+        else:
+            args.append("--receipt-confirm")
+    if forceRelay:
+        args.append("--force-relay")
+    if vfs:
+        args.append("--vfs")
+    if preferredTunnel:
+        args += ["--preferred-tunnel", preferredTunnel]
     if hookUrl:
         args += ["--hook", hookUrl]
     if proxy:
@@ -578,7 +626,7 @@ def startHookServerIfNeeded(hookUrl: Optional[str]) -> Dict[str, Any]:
 
 
 def shareWithFfl(
-    shareTarget: str,
+    shareTarget: Union[str, List[str]],
     stdinBytes: Optional[bytes],
     tempPaths: List[str],
     name: Optional[str],
@@ -591,6 +639,19 @@ def shareWithFfl(
     hookUrl: Optional[str],
     proxy: Optional[str],
     qrInTerminal: bool,
+    exclude: Optional[str] = None,
+    recipientAuth: Optional[str] = None,
+    pickupCode: Optional[str] = None,
+    recipientPublicKey: Optional[str] = None,
+    recipientEmail: Optional[str] = None,
+    alias: Optional[str] = None,
+    receipt: Optional[str] = None,
+    receiptConfirm: Optional[str] = None,
+    forceRelay: bool = False,
+    upload: Optional[str] = None,
+    resumeUpload: bool = False,
+    vfs: bool = False,
+    preferredTunnel: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Common sharing logic for all share functions.
@@ -610,6 +671,19 @@ def shareWithFfl(
         timeoutSeconds,
         effectiveHookUrl,
         proxy,
+        exclude=exclude,
+        recipientAuth=recipientAuth,
+        pickupCode=pickupCode,
+        recipientPublicKey=recipientPublicKey,
+        recipientEmail=recipientEmail,
+        alias=alias,
+        receipt=receipt,
+        receiptConfirm=receiptConfirm,
+        forceRelay=forceRelay,
+        upload=upload,
+        resumeUpload=resumeUpload,
+        vfs=vfs,
+        preferredTunnel=preferredTunnel,
     )
 
     return spawnFflAndWaitLink(args, stdinBytes, waitLinkSeconds, tempPaths, hookServer, None, qrInTerminal)
@@ -768,21 +842,56 @@ def fflShareText(
     hookUrl: Optional[str] = None,
     proxy: Optional[str] = None,
     qrInTerminal: bool = False,
+    recipientAuth: Optional[str] = None,
+    pickupCode: Optional[str] = None,
+    recipientPublicKey: Optional[str] = None,
+    recipientEmail: Optional[str] = None,
+    alias: Optional[str] = None,
+    receipt: Optional[str] = None,
+    receiptConfirm: Optional[str] = None,
+    forceRelay: bool = False,
 ) -> Dict[str, Any]:
     """
-    Share a short text using ffl. Returns a sessionId and link.
+    Share text content using ffl. Returns a sessionId and link.
     E2EE encryption is enabled by default for security. Set e2ee=False to disable.
     If qrInTerminal is True, also returns a QR code as ASCII art for terminal display.
+
+    Args:
+        text: Text content to share
+        name: Download filename shown to recipient (default: shared.txt)
+        e2ee: Enable end-to-end encryption (default: True)
+        authUser: HTTP Basic Auth username to protect the link
+        authPassword: HTTP Basic Auth password to protect the link
+        maxDownloads: Stop serving after N downloads (default: 1)
+        timeoutSeconds: Stop serving after N seconds of inactivity (default: 1800)
+        waitLinkSeconds: Seconds to wait for link generation
+        hookUrl: Custom webhook URL for events
+        proxy: Proxy server URL (e.g. socks5://127.0.0.1:9050)
+        qrInTerminal: Return ASCII QR code art for terminal display
+        recipientAuth: Recipient authentication mode — pickup (6-digit code), pubkey (RSA challenge), pubkey+pickup (both), email (OTP)
+        pickupCode: Specific pickup code to use (default: auto-generated)
+        recipientPublicKey: Path to recipient .fflpub public key file for pubkey auth
+        recipientEmail: Recipient email(s) for OTP auth, comma-separated
+        alias: Custom link alias instead of random UID (requires Standard+ account)
+        receipt: Send email notification when recipient downloads (pass email address, or empty string for account email)
+        receiptConfirm: Require recipient to confirm before download starts; pass confirmation message or empty string for default
+        forceRelay: Disable direct WebRTC; route all traffic through tunnel
     """
     textBytes = text.encode("utf-8")
     tempPaths: List[str] = []
 
+    kwargs = dict(
+        recipientAuth=recipientAuth, pickupCode=pickupCode, recipientPublicKey=recipientPublicKey,
+        recipientEmail=recipientEmail, alias=alias, receipt=receipt, receiptConfirm=receiptConfirm,
+        forceRelay=forceRelay,
+    )
+
     if fflUseStdin:
-        return shareWithFfl("-", textBytes, tempPaths, name, e2ee, authUser, authPassword, maxDownloads, timeoutSeconds, waitLinkSeconds, hookUrl, proxy, qrInTerminal)
+        return shareWithFfl("-", textBytes, tempPaths, name, e2ee, authUser, authPassword, maxDownloads, timeoutSeconds, waitLinkSeconds, hookUrl, proxy, qrInTerminal, **kwargs)
 
     tempPath = createTempFile(name, textBytes)
     tempPaths.append(tempPath)
-    return shareWithFfl(tempPath, None, tempPaths, name, e2ee, authUser, authPassword, maxDownloads, timeoutSeconds, waitLinkSeconds, hookUrl, proxy, qrInTerminal)
+    return shareWithFfl(tempPath, None, tempPaths, name, e2ee, authUser, authPassword, maxDownloads, timeoutSeconds, waitLinkSeconds, hookUrl, proxy, qrInTerminal, **kwargs)
 
 
 @mcp.tool
@@ -798,26 +907,62 @@ def fflShareBase64(
     hookUrl: Optional[str] = None,
     proxy: Optional[str] = None,
     qrInTerminal: bool = False,
+    recipientAuth: Optional[str] = None,
+    pickupCode: Optional[str] = None,
+    recipientPublicKey: Optional[str] = None,
+    recipientEmail: Optional[str] = None,
+    alias: Optional[str] = None,
+    receipt: Optional[str] = None,
+    receiptConfirm: Optional[str] = None,
+    forceRelay: bool = False,
 ) -> Dict[str, Any]:
     """
-    Share arbitrary base64 bytes using ffl. Returns a sessionId and link.
+    Share arbitrary binary data (base64-encoded) using ffl. Returns a sessionId and link.
     E2EE encryption is enabled by default for security. Set e2ee=False to disable.
     If qrInTerminal is True, also returns a QR code as ASCII art for terminal display.
+
+    Args:
+        dataB64: Base64-encoded binary data to share
+        name: Download filename shown to recipient (default: data.bin)
+        e2ee: Enable end-to-end encryption (default: True)
+        authUser: HTTP Basic Auth username to protect the link
+        authPassword: HTTP Basic Auth password to protect the link
+        maxDownloads: Stop serving after N downloads (default: 1)
+        timeoutSeconds: Stop serving after N seconds of inactivity (default: 1800)
+        waitLinkSeconds: Seconds to wait for link generation
+        hookUrl: Custom webhook URL for events
+        proxy: Proxy server URL (e.g. socks5://127.0.0.1:9050)
+        qrInTerminal: Return ASCII QR code art for terminal display
+        recipientAuth: Recipient authentication mode — pickup (6-digit code), pubkey (RSA challenge), pubkey+pickup (both), email (OTP)
+        pickupCode: Specific pickup code to use (default: auto-generated)
+        recipientPublicKey: Path to recipient .fflpub public key file for pubkey auth
+        recipientEmail: Recipient email(s) for OTP auth, comma-separated
+        alias: Custom link alias instead of random UID (requires Standard+ account)
+        receipt: Send email notification when recipient downloads (pass email address, or empty string for account email)
+        receiptConfirm: Require recipient to confirm before download starts; pass confirmation message or empty string for default
+        forceRelay: Disable direct WebRTC; route all traffic through tunnel
     """
     rawBytes = base64.b64decode(dataB64, validate=True)
     tempPaths: List[str] = []
 
+    kwargs = dict(
+        recipientAuth=recipientAuth, pickupCode=pickupCode, recipientPublicKey=recipientPublicKey,
+        recipientEmail=recipientEmail, alias=alias, receipt=receipt, receiptConfirm=receiptConfirm,
+        forceRelay=forceRelay,
+    )
+
     if fflUseStdin:
-        return shareWithFfl("-", rawBytes, tempPaths, name, e2ee, authUser, authPassword, maxDownloads, timeoutSeconds, waitLinkSeconds, hookUrl, proxy, qrInTerminal)
+        return shareWithFfl("-", rawBytes, tempPaths, name, e2ee, authUser, authPassword, maxDownloads, timeoutSeconds, waitLinkSeconds, hookUrl, proxy, qrInTerminal, **kwargs)
 
     tempPath = createTempFile(name, rawBytes)
     tempPaths.append(tempPath)
-    return shareWithFfl(tempPath, None, tempPaths, name, e2ee, authUser, authPassword, maxDownloads, timeoutSeconds, waitLinkSeconds, hookUrl, proxy, qrInTerminal)
+    return shareWithFfl(tempPath, None, tempPaths, name, e2ee, authUser, authPassword, maxDownloads, timeoutSeconds, waitLinkSeconds, hookUrl, proxy, qrInTerminal, **kwargs)
 
 
 @mcp.tool
 def fflShareFile(
     path: str,
+    name: Optional[str] = None,
     e2ee: bool = True,
     authUser: Optional[str] = None,
     authPassword: Optional[str] = None,
@@ -827,11 +972,50 @@ def fflShareFile(
     hookUrl: Optional[str] = None,
     proxy: Optional[str] = None,
     qrInTerminal: bool = False,
+    exclude: Optional[str] = None,
+    recipientAuth: Optional[str] = None,
+    pickupCode: Optional[str] = None,
+    recipientPublicKey: Optional[str] = None,
+    recipientEmail: Optional[str] = None,
+    alias: Optional[str] = None,
+    receipt: Optional[str] = None,
+    receiptConfirm: Optional[str] = None,
+    forceRelay: bool = False,
+    upload: Optional[str] = None,
+    resumeUpload: bool = False,
+    vfs: bool = False,
+    preferredTunnel: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Share a local file or folder using ffl. Respects ALLOWED_BASE_DIR when configured.
     E2EE encryption is enabled by default for security. Set e2ee=False to disable.
     If qrInTerminal is True, also returns a QR code as ASCII art for terminal display.
+
+    Args:
+        path: Path to file or folder to share
+        name: Custom download filename shown to recipient
+        e2ee: Enable end-to-end encryption (default: True)
+        authUser: HTTP Basic Auth username to protect the link
+        authPassword: HTTP Basic Auth password to protect the link
+        maxDownloads: Stop serving after N downloads, P2P only (default: 1)
+        timeoutSeconds: Stop serving after N seconds of inactivity, P2P only (default: 1800)
+        waitLinkSeconds: Seconds to wait for link generation
+        hookUrl: Custom webhook URL for events
+        proxy: Proxy server URL (e.g. socks5://127.0.0.1:9050)
+        qrInTerminal: Return ASCII QR code art for terminal display
+        exclude: Exclude files matching glob or regex patterns, comma-separated (e.g. '*.log' or 're:\\.tmp$')
+        recipientAuth: Recipient authentication mode — pickup (6-digit code), pubkey (RSA challenge), pubkey+pickup (both), email (OTP)
+        pickupCode: Specific pickup code to use (default: auto-generated)
+        recipientPublicKey: Path to recipient .fflpub public key file for pubkey auth
+        recipientEmail: Recipient email(s) for OTP auth, comma-separated
+        alias: Custom link alias instead of random UID (requires Standard+ account)
+        receipt: Send email notification when recipient downloads (pass email address, or empty string for account email)
+        receiptConfirm: Require recipient to confirm before download starts; pass confirmation message or empty string for default
+        forceRelay: Disable direct WebRTC; route all traffic through tunnel
+        upload: Upload to FFL server for async sharing — recipient doesn't need sender online. Pass duration e.g. '1 day', '6 hours', '1 week' (requires Standard+ account)
+        resumeUpload: Resume an interrupted upload (default: False)
+        vfs: Expose as VFS server (vfs:// URI) instead of regular download
+        preferredTunnel: Set preferred tunnel for this and future runs — cloudflare, ngrok, bore, etc.
     """
     sharePath = pathlib.Path(path)
     if not sharePath.exists():
@@ -840,7 +1024,92 @@ def fflShareFile(
         raise PermissionError(f"Path not allowed by ALLOWED_BASE_DIR: {path}")
 
     tempPaths: List[str] = []
-    return shareWithFfl(str(sharePath), None, tempPaths, None, e2ee, authUser, authPassword, maxDownloads, timeoutSeconds, waitLinkSeconds, hookUrl, proxy, qrInTerminal)
+    return shareWithFfl(
+        str(sharePath), None, tempPaths, name, e2ee, authUser, authPassword,
+        maxDownloads, timeoutSeconds, waitLinkSeconds, hookUrl, proxy, qrInTerminal,
+        exclude=exclude, recipientAuth=recipientAuth, pickupCode=pickupCode,
+        recipientPublicKey=recipientPublicKey, recipientEmail=recipientEmail,
+        alias=alias, receipt=receipt, receiptConfirm=receiptConfirm,
+        forceRelay=forceRelay, upload=upload, resumeUpload=resumeUpload,
+        vfs=vfs, preferredTunnel=preferredTunnel,
+    )
+
+
+@mcp.tool
+def fflShareFiles(
+    paths: List[str],
+    name: Optional[str] = None,
+    e2ee: bool = True,
+    authUser: Optional[str] = None,
+    authPassword: Optional[str] = None,
+    maxDownloads: int = 1,
+    timeoutSeconds: int = 1800,
+    waitLinkSeconds: int = defaultWaitLinkSeconds,
+    hookUrl: Optional[str] = None,
+    proxy: Optional[str] = None,
+    qrInTerminal: bool = False,
+    exclude: Optional[str] = None,
+    recipientAuth: Optional[str] = None,
+    pickupCode: Optional[str] = None,
+    recipientPublicKey: Optional[str] = None,
+    recipientEmail: Optional[str] = None,
+    alias: Optional[str] = None,
+    receipt: Optional[str] = None,
+    receiptConfirm: Optional[str] = None,
+    forceRelay: bool = False,
+    upload: Optional[str] = None,
+    resumeUpload: bool = False,
+    preferredTunnel: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Share multiple local files at once using ffl. ffl auto-zips them into a single download.
+    E2EE encryption is enabled by default for security. Set e2ee=False to disable.
+
+    Args:
+        paths: List of local file paths to share together (auto-zipped by ffl)
+        name: Custom download filename shown to recipient (e.g. 'release-v2.0.zip')
+        e2ee: Enable end-to-end encryption (default: True)
+        authUser: HTTP Basic Auth username to protect the link
+        authPassword: HTTP Basic Auth password to protect the link
+        maxDownloads: Stop serving after N downloads, P2P only (default: 1)
+        timeoutSeconds: Stop serving after N seconds of inactivity, P2P only (default: 1800)
+        waitLinkSeconds: Seconds to wait for link generation
+        hookUrl: Custom webhook URL for events
+        proxy: Proxy server URL (e.g. socks5://127.0.0.1:9050)
+        qrInTerminal: Return ASCII QR code art for terminal display
+        exclude: Exclude files matching glob or regex patterns, comma-separated
+        recipientAuth: Recipient authentication mode — pickup, pubkey, pubkey+pickup, email
+        pickupCode: Specific pickup code to use (default: auto-generated)
+        recipientPublicKey: Path to recipient .fflpub public key file for pubkey auth
+        recipientEmail: Recipient email(s) for OTP auth, comma-separated
+        alias: Custom link alias instead of random UID (requires Standard+ account)
+        receipt: Send email notification when recipient downloads
+        receiptConfirm: Require recipient to confirm before download starts
+        forceRelay: Disable direct WebRTC; route all traffic through tunnel
+        upload: Upload to FFL server for async sharing — e.g. '1 day', '6 hours' (requires Standard+ account)
+        resumeUpload: Resume an interrupted upload (default: False)
+        preferredTunnel: Set preferred tunnel — cloudflare, ngrok, bore, etc.
+    """
+    if not paths:
+        raise ValueError("paths must contain at least one file path")
+
+    sharePaths = [pathlib.Path(p) for p in paths]
+    for sharePath in sharePaths:
+        if not sharePath.exists():
+            raise FileNotFoundError(str(sharePath))
+        if not isPathAllowed(sharePath):
+            raise PermissionError(f"Path not allowed by ALLOWED_BASE_DIR: {sharePath}")
+
+    shareTargets = [str(p) for p in sharePaths]
+    return shareWithFfl(
+        shareTargets, None, [], name, e2ee, authUser, authPassword,
+        maxDownloads, timeoutSeconds, waitLinkSeconds, hookUrl, proxy, qrInTerminal,
+        exclude=exclude, recipientAuth=recipientAuth, pickupCode=pickupCode,
+        recipientPublicKey=recipientPublicKey, recipientEmail=recipientEmail,
+        alias=alias, receipt=receipt, receiptConfirm=receiptConfirm,
+        forceRelay=forceRelay, upload=upload, resumeUpload=resumeUpload,
+        preferredTunnel=preferredTunnel,
+    )
 
 
 @mcp.tool
@@ -851,6 +1120,9 @@ def fflDownload(
     authUser: Optional[str] = None,
     authPassword: Optional[str] = None,
     proxy: Optional[str] = None,
+    recipientAuth: Optional[str] = None,
+    pickupCode: Optional[str] = None,
+    recipientPrivateKey: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Download a file from a FastFileLink URL or regular HTTP(S) URL using ffl.
@@ -860,11 +1132,14 @@ def fflDownload(
 
     Args:
         url: FastFileLink URL or regular HTTP(S) URL to download from
-        outputPath: Optional output file path (default: use filename from server)
+        outputPath: Optional output file or directory path (default: use filename from server)
         resume: Resume incomplete download (default: False)
         authUser: Username for HTTP Basic Authentication
         authPassword: Password for HTTP Basic Authentication
-        proxy: Proxy server for connections
+        proxy: Proxy server URL (e.g. socks5://127.0.0.1:9050)
+        recipientAuth: Recipient authentication mode required by sender — pickup, pubkey, or email
+        pickupCode: 6-digit pickup code (when recipientAuth is pickup)
+        recipientPrivateKey: Path to .fflkey private key file for pubkey auth
 
     Returns:
         Dictionary with download status and output file path
@@ -882,6 +1157,15 @@ def fflDownload(
 
     if authPassword:
         command += ["--auth-password", authPassword]
+
+    if recipientAuth:
+        command += ["--recipient-auth", recipientAuth]
+
+    if pickupCode:
+        command += ["--pickup-code", pickupCode]
+
+    if recipientPrivateKey:
+        command += ["--recipient-private-key", recipientPrivateKey]
 
     if proxy:
         command += ["--proxy", proxy]
@@ -1040,6 +1324,70 @@ def fflDownload(
             "url": url,
             "debugLogPath": logPath if logPath else None,
         }
+
+
+@mcp.tool
+def fflKeygen(
+    name: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Generate an RSA keypair for passwordless pubkey authentication.
+
+    Produces two files:
+    - <name>.fflpub — public key (share with the sender)
+    - <name>.fflkey — private key (keep secret; used during download)
+
+    The sender then shares with: fflShareFile(..., recipientAuth='pubkey', recipientPublicKey='alice.fflpub')
+    The recipient downloads with: fflDownload(..., recipientAuth='pubkey', recipientPrivateKey='alice.fflkey')
+
+    Args:
+        name: Base name for the generated key files (default: ffl assigns a name)
+
+    Returns:
+        Dictionary with returncode and output describing the generated key paths
+    """
+    command = buildBaseCommand() + ["keygen"]
+
+    if name:
+        command += ["--name", name]
+
+    if fflDebugEnabled:
+        command += ["--log-level", "DEBUG"]
+
+    useShell = shouldUseShell(command)
+    logger.info("Running ffl keygen: %s", shlex.join(command))
+
+    logFile, logPath = setupDebugLogging(prefix="ffl_keygen_output_", customPath=fflDebugPath)
+
+    try:
+        if useShell:
+            result = subprocess.run(shlex.join(command), shell=True, stdout=logFile, stderr=logFile, text=True, timeout=60)
+        else:
+            result = subprocess.run(command, shell=False, stdout=logFile, stderr=logFile, text=True, timeout=60)
+    finally:
+        try:
+            logFile.close()
+        except Exception as exc:
+            logger.debug("Failed to close keygen log file: %s", exc)
+
+    output = ""
+    if logPath and os.path.exists(logPath):
+        try:
+            with open(logPath, "r") as f:
+                output = f.read()
+        except Exception as exc:
+            logger.debug("Failed to read keygen output: %s", exc)
+        if not fflDebugEnabled:
+            try:
+                os.remove(logPath)
+            except Exception as exc:
+                logger.debug("Failed to remove keygen log: %s", exc)
+
+    return {
+        "ok": result.returncode == 0,
+        "returncode": result.returncode,
+        "output": output.strip(),
+    }
 
 
 @mcp.tool
