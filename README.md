@@ -72,38 +72,100 @@ uvx --from git+https://github.com/nuwainfo/ffl-mcp install --config /path/to/cla
 
 ## Tools
 
-**Sharing:**
-- `fflShareText(text, ..., e2ee=True, qrInTerminal=False) -> {sessionId, link, qrCode?, ...}`
-- `fflShareBase64(dataB64, ..., e2ee=True, qrInTerminal=False) -> {sessionId, link, qrCode?, ...}`
-- `fflShareFile(path, ..., e2ee=True, qrInTerminal=False) -> {sessionId, link, qrCode?, ...}`
+### Sharing
 
-All share functions use **end-to-end encryption (E2EE) by default** for security. Set `e2ee=False` to disable if needed.
+All share tools use **E2EE by default** (`e2ee=True`). Set `qrInTerminal=True` to get a scannable ASCII QR code back.
 
-Set `qrInTerminal=True` to get a scannable ASCII QR code in the response (displayed as terminal art, not base64 PNG).
+| Tool | Input |
+|---|---|
+| `fflShareText(text, name?, ...)` | Plain text |
+| `fflShareBase64(dataB64, name?, ...)` | Binary data (base64-encoded) |
+| `fflShareFile(path, name?, ...)` | Single local file or folder |
+| `fflShareFiles(paths, name?, ...)` | Multiple files (ffl auto-zips them into one download) |
 
-**Downloading:**
-- `fflDownload(url, outputPath?, resume?, ...) -> {ok, returncode, outputPath?, transferMode?, transferInfo?, message?, ...}`
+**Common options for all share tools:**
 
-Downloads from FastFileLink URLs (uses **WebRTC P2P when possible**, falls back to HTTP) or regular HTTP(S) URLs (works like wget).
+| Option | Default | Description |
+|---|---|---|
+| `e2ee` | `True` | End-to-end encryption |
+| `qrInTerminal` | `False` | Return ASCII QR art (`qrCode` in response) |
+| `authUser` / `authPassword` | — | HTTP Basic Auth to protect the link |
+| `maxDownloads` | `1` | Stop serving after N downloads (P2P only) |
+| `timeoutSeconds` | `1800` | Inactivity timeout in seconds (P2P only) |
+| `recipientAuth` | — | `pickup` (6-digit code), `pubkey` (RSA), `pubkey+pickup`, or `email` (OTP) |
+| `pickupCode` | auto | Specific pickup code for `pickup` mode |
+| `recipientPublicKey` | — | Path to `.fflpub` file for `pubkey` mode |
+| `recipientEmail` | — | Email(s) for `email` OTP mode, comma-separated |
+| `alias` | — | Custom link alias e.g. `my-release` (requires Standard+ account) |
+| `receipt` | — | Email notification when recipient downloads |
+| `receiptConfirm` | — | Require recipient confirmation before download; pass a message or `""` |
+| `forceRelay` | `False` | Disable WebRTC, route all traffic through tunnel |
+| `upload` | — | Upload to FFL server instead of P2P — e.g. `"1 day"`, `"6 hours"` (requires Standard+ account) |
+| `resumeUpload` | `False` | Resume an interrupted upload |
+| `proxy` | — | Proxy URL e.g. `socks5://127.0.0.1:9050` |
 
-Returns transfer mode information:
-- `webrtc_p2p`: Fast direct peer-to-peer connection
-- `http_fallback`: HTTP relay (when WebRTC fails)
-- `http_direct`: Direct HTTP download (non-FastFileLink URLs)
+**Additional options for `fflShareFile` / `fflShareFiles`:**
 
-**Session Management:**
-- `fflListSessions()`
-- `fflStopSession(sessionId)`
-- `fflGetSession(sessionId)`
-- `fflGetSessionEvents(sessionId, limit=50)`
+| Option | Description |
+|---|---|
+| `exclude` | Glob or regex patterns to exclude, comma-separated — e.g. `*.pyc,__pycache__` or `re:\.env$` |
+| `vfs` | Expose as VFS server (`vfs://` URI) — `fflShareFile` only |
+| `preferredTunnel` | Set preferred tunnel for this and future runs — `cloudflare`, `ngrok`, `bore`, etc. |
+
+**Response fields:** `sessionId`, `link`, `pid`, `qrCode?` (ASCII art when `qrInTerminal=True`), `debugLogPath?`
+
+### Downloading
+
+```
+fflDownload(url, outputPath?, resume?, authUser?, authPassword?,
+            recipientAuth?, pickupCode?, recipientPrivateKey?, proxy?)
+  -> {ok, returncode, outputPath?, transferMode?, transferInfo?, message?, ...}
+```
+
+Downloads from FastFileLink URLs (WebRTC P2P when possible, HTTP fallback) or any HTTP(S) URL (works like wget).
+
+| `transferMode` | Meaning |
+|---|---|
+| `webrtc_p2p` | Direct peer-to-peer (fastest) |
+| `http_fallback` | HTTP relay when WebRTC fails |
+| `http_direct` | Regular HTTP download (non-FastFileLink URL) |
+
+For authenticated links: pass `recipientAuth` + `pickupCode` (pickup mode) or `recipientPrivateKey` (pubkey mode).
+
+### Keygen
+
+```
+fflKeygen(name?) -> {ok, returncode, output}
+```
+
+Generates an RSA keypair for passwordless `pubkey` recipient auth:
+- `<name>.fflpub` — share with the sender (pass as `recipientPublicKey`)
+- `<name>.fflkey` — keep private (pass as `recipientPrivateKey` when downloading)
+
+### Session Management
+
+- `fflListSessions()` — list active share sessions
+- `fflStopSession(sessionId)` — terminate a session
+- `fflGetSession(sessionId)` — get session details
+- `fflGetSessionEvents(sessionId, limit=50)` — retrieve webhook events
 
 ## Notes
 
 - `FFL_USE_STDIN=1` avoids writing text/base64 payloads to disk.
 - `FFL_RUN_MODE=python` runs the Core.py CLI (requires `FFL_CORE_PATH`).
-- `--hook` and `--proxy` are passed through to ffl.
-- `FFL_USE_HOOK=1` starts a local webhook server and passes it to `ffl` for link/progress events.
-- `FFL_DEBUG=1` enables debug logging - ffl output is saved to a temp file with path returned in `debugLogPath`.
+- `FFL_USE_HOOK=1` starts a local webhook server and passes it to `ffl` for real-time link/progress events.
+- `FFL_DEBUG=1` saves ffl output to a temp log file; path returned as `debugLogPath`. Set `FFL_DEBUG=/path/to/log.txt` to use a fixed path.
+- `ALLOWED_BASE_DIR` restricts `fflShareFile`/`fflShareFiles` to a specific directory.
+
+## Testing
+
+```bash
+# Unit + binary tests (no network needed)
+python -m unittest discover -s tests -p "*Test.py" -v
+
+# All tests including share/download round-trips (requires network)
+FFL_INTEGRATION_TESTS=1 python -m unittest discover -s tests -p "*Test.py" -v
+```
 
 ## WSL2 Users
 
