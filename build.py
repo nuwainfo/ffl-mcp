@@ -14,26 +14,34 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Build a self-contained ffl-mcp executable using PyApp with all packages pre-bundled.
+"""Build ffl-mcp: PyApp binary + Windows installer (NSIS MUI2).
 
 Usage:
-    python build.py              # build for current platform
-    python build.py --clean      # remove build artifacts first
-    python build.py --skip-wheel # reuse existing wheel in dist/
-    python build.py --rebuild-dist  # force re-install packages into distribution
+    python build.py                  # full build (binary + installer)
+    python build.py --skip-wheel     # reuse existing wheel in dist/
+    python build.py --rebuild-dist   # force re-install packages into distribution
+    python build.py --skip-installer # skip NSIS installer step
+    python build.py --installer-only # only build installer, reuse dist/ffl-mcp.exe
+    python build.py --clean          # remove all build artifacts
 
-Output: dist/ffl-mcp[.exe]
+Outputs:
+    dist/ffl-mcp.exe           standalone binary (no Python/uv required)
+    dist/ffl-mcp-setup.exe     Windows installer for coworkers
 
-How it works:
-  1. Build a wheel from the local source with `uv build`.
-  2. Download Python 3.12 distribution (cached in build-cache/).
-  3. Pre-install the wheel + all its dependencies into the distribution.
-  4. Re-archive the distribution → write to pyapp-src/src/embed/distribution.
-  5. Download / update the PyApp source from GitHub (or reuse cached copy).
-  6. Set PYAPP_FULL_ISOLATION=1 + PYAPP_SKIP_INSTALL=1 so PyApp just extracts the
-     pre-built distribution and runs immediately — no pip, no network on first launch.
-  7. Compile PyApp with `cargo build --release`.
-  8. Copy the resulting binary to dist/ffl-mcp[.exe].
+Installer behaviour (NSIS + MUI2):
+  - Installs ffl-mcp.exe to %LocalAppData%\\Programs\\ffl-mcp\\
+  - Registers the MCP server directly via PowerShell (no PyApp extraction during
+    install — avoids hang).  PyApp extraction happens on first actual use.
+  - Provides an uninstaller (Add/Remove Programs) that removes the binary, removes
+    the MCP server entry from Claude Desktop config and Claude Code CLI, and cleans
+    the PyApp extraction cache.
+
+How the binary is built:
+  1. Build a wheel with `uv build`.
+  2. Download Python 3.12 astral-sh distribution (cached in build-cache/).
+  3. Pre-install the wheel + all deps into the distribution.
+  4. Compile PyApp with PYAPP_FULL_ISOLATION=1 + PYAPP_SKIP_INSTALL=1 so the binary
+     just extracts the pre-built Python+packages on first run — no pip, no network.
 """
 
 import argparse
@@ -46,7 +54,16 @@ import tarfile
 import urllib.request
 import zipfile
 from pathlib import Path
+from typing import Optional
 
+# ── Application metadata ──────────────────────────────────────────────────────
+APP_VERSION = "0.1.5"
+APP_NAME = "FastFileLink MCP"
+APP_PUBLISHER = "FastFileLink"
+APP_URL = "https://fastfilelink.com"
+MCP_SERVER_NAME = "ffl"
+
+# ── Paths ─────────────────────────────────────────────────────────────────────
 PYAPP_REPO_ZIP = "https://github.com/ofek/pyapp/archive/refs/heads/master.zip"
 PYAPP_DIR = Path("pyapp-src")
 DIST_DIR = Path("dist")
@@ -54,20 +71,22 @@ BUILD_CACHE_DIR = Path("build-cache")
 EXEC_SPEC = "src.entrypoint:main"
 PYTHON_VERSION = "3.12"
 
-# Python 3.12.12 Windows x64 install_only_stripped distribution (astral-sh build).
-# This is the same distribution PyApp would download for Python 3.12 on Windows x64.
+# Python 3.12.12 Windows x64 install_only_stripped (astral-sh build).
 PYTHON_DIST_URL = (
     "https://github.com/astral-sh/python-build-standalone/releases/download/20251014/"
     "cpython-3.12.12%2B20251014-x86_64-pc-windows-msvc-install_only_stripped.tar.gz"
 )
-# Paths within the distribution archive
-DIST_PYTHON_PATH = "python/python.exe"          # used by PYAPP_DISTRIBUTION_PYTHON_PATH
-DIST_SITE_PACKAGES = "python/Lib/site-packages"  # used by PYAPP_DISTRIBUTION_SITE_PACKAGES_PATH
+DIST_PYTHON_PATH = "python/python.exe"
+DIST_SITE_PACKAGES = "python/Lib/site-packages"
 
 PYTHON_DIST_ARCHIVE = BUILD_CACHE_DIR / "python-dist.tar.gz"
 PYTHON_DIST_DIR = BUILD_CACHE_DIR / "python-dist"
 PYTHON_PREINSTALLED_ARCHIVE = BUILD_CACHE_DIR / "python-preinstalled.tar.gz"
+INSTALL_SCRIPT = BUILD_CACHE_DIR / "install-mcp.ps1"
+UNINSTALL_SCRIPT = BUILD_CACHE_DIR / "uninstall-mcp.ps1"
 
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
 
 def run(cmd, **kwargs):
     print(f"  $ {' '.join(str(c) for c in cmd)}")
@@ -75,27 +94,15 @@ def run(cmd, **kwargs):
     return result
 
 
-def downloadPyappSource():
-    zipPath = Path("pyapp-master.zip")
-    print("Downloading PyApp source from GitHub...")
-    urllib.request.urlretrieve(PYAPP_REPO_ZIP, zipPath)
-    with zipfile.ZipFile(zipPath) as zf:
-        zf.extractall(".")
-    extracted = Path("pyapp-master")
-    if PYAPP_DIR.exists():
-        shutil.rmtree(PYAPP_DIR)
-    extracted.rename(PYAPP_DIR)
-    zipPath.unlink()
-    print(f"PyApp source extracted to {PYAPP_DIR}/")
-
+# ── Step 1: Wheel ─────────────────────────────────────────────────────────────
 
 def buildWheel():
-    print("\n[1/5] Building wheel...")
+    print("\n[1/6] Building wheel...")
     DIST_DIR.mkdir(exist_ok=True)
     run(["uv", "build", "--wheel", "--out-dir", str(DIST_DIR)])
 
 
-def findWheel():
+def findWheel() -> Path:
     wheels = sorted(DIST_DIR.glob("ffl_mcp-*.whl"))
     if not wheels:
         wheels = sorted(DIST_DIR.glob("ffl-mcp-*.whl"))
@@ -104,6 +111,8 @@ def findWheel():
         sys.exit(1)
     return max(wheels, key=lambda p: p.stat().st_mtime)
 
+
+# ── Step 2: Pre-installed Python distribution ─────────────────────────────────
 
 def downloadPythonDist():
     BUILD_CACHE_DIR.mkdir(exist_ok=True)
@@ -128,13 +137,13 @@ def extractPythonDist():
     print("  Extracting Python distribution...")
     PYTHON_DIST_DIR.mkdir(parents=True)
     with tarfile.open(PYTHON_DIST_ARCHIVE, "r:gz") as tar:
-        tar.extractall(PYTHON_DIST_DIR)
+        tar.extractall(PYTHON_DIST_DIR, filter="data")
     print(f"  Extracted to {PYTHON_DIST_DIR}")
 
 
 def prepareDistribution(wheelPath: Path, rebuildDist: bool):
     """Pre-install wheel + deps into the Python distribution and archive for PyApp embedding."""
-    print("\n[2/5] Preparing pre-bundled Python distribution...")
+    print("\n[2/6] Preparing pre-bundled Python distribution...")
 
     if PYTHON_PREINSTALLED_ARCHIVE.exists() and not rebuildDist:
         sizeMb = PYTHON_PREINSTALLED_ARCHIVE.stat().st_size / 1_048_576
@@ -167,32 +176,46 @@ def prepareDistribution(wheelPath: Path, rebuildDist: bool):
     print(f"  Pre-installed distribution archived: {PYTHON_PREINSTALLED_ARCHIVE} ({sizeMb:.0f} MB)")
 
 
+# ── Steps 3 & 4: PyApp binary ─────────────────────────────────────────────────
+
+def downloadPyappSource():
+    zipPath = Path("pyapp-master.zip")
+    print("Downloading PyApp source from GitHub...")
+    urllib.request.urlretrieve(PYAPP_REPO_ZIP, zipPath)
+    with zipfile.ZipFile(zipPath) as zf:
+        zf.extractall(".")
+    extracted = Path("pyapp-master")
+    if PYAPP_DIR.exists():
+        shutil.rmtree(PYAPP_DIR)
+    extracted.rename(PYAPP_DIR)
+    zipPath.unlink()
+    print(f"PyApp source extracted to {PYAPP_DIR}/")
+
+
 def buildPyapp() -> Path:
-    print("\n[3/5] Ensuring PyApp source is available...")
+    print("\n[3/6] Ensuring PyApp source is available...")
     if not PYAPP_DIR.exists():
         downloadPyappSource()
     else:
         print(f"  Using cached {PYAPP_DIR}/")
 
-    print("\n[4/5] Compiling PyApp with cargo...")
+    print("\n[4/6] Compiling PyApp with cargo...")
     env = os.environ.copy()
     env["PYAPP_PROJECT_NAME"] = "ffl-mcp"
-    env["PYAPP_PROJECT_VERSION"] = "0.1.5"
+    env["PYAPP_PROJECT_VERSION"] = APP_VERSION
     env["PYAPP_EXEC_SPEC"] = EXEC_SPEC
     env["PYAPP_PYTHON_VERSION"] = PYTHON_VERSION
-    # Pre-installed distribution: embed it at build time, skip pip install at runtime.
-    # PYAPP_DISTRIBUTION_PATH copies the local archive into the binary during cargo build.
-    # Do NOT set PYAPP_DISTRIBUTION_SOURCE alongside PATH — that panics.
+    # PYAPP_DISTRIBUTION_PATH copies the local archive into the binary at compile time.
+    # Do NOT set PYAPP_DISTRIBUTION_SOURCE alongside it — build.rs panics if both are set.
     env["PYAPP_FULL_ISOLATION"] = "1"
     env["PYAPP_SKIP_INSTALL"] = "1"
     env["PYAPP_DISTRIBUTION_PATH"] = str(PYTHON_PREINSTALLED_ARCHIVE.resolve())
     env["PYAPP_DISTRIBUTION_FORMAT"] = "tar|gzip"
     env["PYAPP_DISTRIBUTION_PYTHON_PATH"] = DIST_PYTHON_PATH
     env["PYAPP_DISTRIBUTION_SITE_PACKAGES_PATH"] = DIST_SITE_PACKAGES
-    # Skip UPX compression.
     env["PYAPP_SKIP_COMPRESSION"] = "true"
-    # Expose the binary's own path as the PYAPP env var so the installer can
-    # write the correct command path into MCP client configs.
+    # Makes PyApp set PYAPP env var to the binary's own path so install.py can
+    # register the correct command path in Claude configs.
     env["PYAPP_PASS_LOCATION"] = "1"
 
     run(["cargo", "build", "--release"], cwd=PYAPP_DIR, env=env)
@@ -206,17 +229,151 @@ def buildPyapp() -> Path:
 
 
 def copyOutput(builtBinary: Path) -> Path:
-    print("\n[5/5] Copying output binary...")
+    print("\n[5/6] Copying output binary...")
     DIST_DIR.mkdir(exist_ok=True)
     isWindows = platform.system() == "Windows"
     outputName = "ffl-mcp.exe" if isWindows else "ffl-mcp"
     outputPath = DIST_DIR / outputName
     shutil.copy2(builtBinary, outputPath)
     outputPath.chmod(outputPath.stat().st_mode | 0o111)
-    print(f"\nDone! Binary: {outputPath.resolve()}")
-    print(f"Size: {outputPath.stat().st_size / 1_048_576:.1f} MB")
+    print(f"  Binary: {outputPath.resolve()} ({outputPath.stat().st_size / 1_048_576:.1f} MB)")
     return outputPath
 
+
+# ── Step 6: Windows installer (NSIS + MUI2) ───────────────────────────────────
+
+def findNsis() -> Optional[Path]:
+    candidates = [
+        shutil.which("makensis"),
+        r"C:\Program Files (x86)\NSIS\makensis.exe",
+        r"C:\Program Files\NSIS\makensis.exe",
+    ]
+    for c in candidates:
+        if c and Path(c).exists():
+            return Path(c)
+    return None
+
+
+def generateInstallScript() -> str:
+    """PowerShell script run at install time.
+
+    Registers ffl-mcp directly in Claude Desktop JSON config and Claude Code CLI
+    without invoking ffl-mcp.exe, so there is no PyApp extraction hang during install.
+    PyApp extraction happens on first actual use of the MCP server instead.
+    """
+    # Note: single-quoted PS strings don't expand variables, so we use them for
+    # literal path fragments. Double-quoted strings expand $binaryPath etc.
+    lines = [
+        "# Auto-generated by build.py",
+        "param([string]$InstallDir)",
+        "$ErrorActionPreference = 'SilentlyContinue'",
+        "",
+        "$binaryPath = Join-Path $InstallDir 'ffl-mcp.exe'",
+        "",
+        "# 1. Claude Desktop config",
+        "$configPath = Join-Path $env:APPDATA 'Claude\\claude_desktop_config.json'",
+        "try {",
+        "    if (Test-Path $configPath) {",
+        "        $cfg = Get-Content $configPath -Raw | ConvertFrom-Json",
+        "    } else {",
+        "        $cfg = [PSCustomObject]@{ mcpServers = [PSCustomObject]@{} }",
+        "    }",
+        "    if ($null -eq $cfg.mcpServers) {",
+        "        $cfg | Add-Member -NotePropertyName mcpServers -NotePropertyValue ([PSCustomObject]@{}) -Force",
+        "    }",
+        "    $entry = [PSCustomObject]@{ command = $binaryPath; args = @() }",
+        f"    $cfg.mcpServers | Add-Member -NotePropertyName {MCP_SERVER_NAME} -NotePropertyValue $entry -Force",
+        "    $parent = Split-Path $configPath -Parent",
+        "    if (-not (Test-Path $parent)) { New-Item -ItemType Directory -Path $parent -Force | Out-Null }",
+        "    $utf8NoBom = New-Object System.Text.UTF8Encoding $false",
+        "    [System.IO.File]::WriteAllText($configPath, ($cfg | ConvertTo-Json -Depth 20), $utf8NoBom)",
+        "} catch {}",
+        "",
+        "# 2. Claude Code CLI (best-effort)",
+        "try {",
+        "    $entry = [PSCustomObject]@{ command = $binaryPath; args = @() }",
+        "    $entryJson = $entry | ConvertTo-Json -Compress",
+        f"    & claude mcp remove -s user {MCP_SERVER_NAME} 2>&1 | Out-Null",
+        f"    & claude mcp add-json -s user {MCP_SERVER_NAME} $entryJson 2>&1 | Out-Null",
+        "} catch {}",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def generateUninstallScript() -> str:
+    """PowerShell script run at uninstall time."""
+    lines = [
+        "# Auto-generated by build.py",
+        "$ErrorActionPreference = 'SilentlyContinue'",
+        "",
+        "# 1. Claude Desktop config",
+        "$configPath = Join-Path $env:APPDATA 'Claude\\claude_desktop_config.json'",
+        "if (Test-Path $configPath) {",
+        "    try {",
+        "        $cfg = Get-Content $configPath -Raw | ConvertFrom-Json",
+        f"        $cfg.mcpServers.PSObject.Properties.Remove('{MCP_SERVER_NAME}')",
+        "        $utf8NoBom = New-Object System.Text.UTF8Encoding $false",
+        "        [System.IO.File]::WriteAllText($configPath, ($cfg | ConvertTo-Json -Depth 20), $utf8NoBom)",
+        "    } catch {}",
+        "}",
+        "",
+        "# 2. Claude Code CLI (best-effort)",
+        f"try {{ & claude mcp remove -s user {MCP_SERVER_NAME} 2>&1 | Out-Null }} catch {{}}",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def writeHelperScripts():
+    BUILD_CACHE_DIR.mkdir(exist_ok=True)
+    INSTALL_SCRIPT.write_text(generateInstallScript(), encoding="utf-8")
+    UNINSTALL_SCRIPT.write_text(generateUninstallScript(), encoding="utf-8")
+
+
+def buildInstaller(exePath: Path) -> Optional[Path]:
+    """Build a Windows installer from installer.nsi using NSIS."""
+    print("\n[6/6] Building Windows installer...")
+
+    if platform.system() != "Windows":
+        print("  Skipping — installer is only built on Windows.")
+        return None
+
+    nsisPath = findNsis()
+    if nsisPath is None:
+        print("  WARNING: makensis not found.")
+        print("  Install NSIS from: https://nsis.sourceforge.io/Download")
+        print("  Then re-run:  python build.py --installer-only")
+        return None
+
+    nsiScript = Path("installer.nsi")
+    if not nsiScript.exists():
+        print(f"  ERROR: {nsiScript} not found.", file=sys.stderr)
+        return None
+
+    print(f"  Using NSIS: {nsisPath}")
+
+    DIST_DIR.mkdir(exist_ok=True)
+    writeHelperScripts()
+
+    run([
+        str(nsisPath),
+        f"/DAPP_VERSION={APP_VERSION}",
+        f"/DEXE_PATH={exePath.resolve()}",
+        f"/DINSTALL_SCRIPT_PATH={INSTALL_SCRIPT.resolve()}",
+        f"/DUNINSTALL_SCRIPT_PATH={UNINSTALL_SCRIPT.resolve()}",
+        f"/DOUTPUT_DIR={DIST_DIR.resolve()}",
+        str(nsiScript),
+    ])
+
+    setupExe = DIST_DIR / "ffl-mcp-setup.exe"
+    if not setupExe.exists():
+        print(f"  ERROR: expected installer at {setupExe}", file=sys.stderr)
+        return None
+
+    print(f"  Installer: {setupExe.resolve()} ({setupExe.stat().st_size / 1_048_576:.1f} MB)")
+    return setupExe
+
+
+# ── Clean ─────────────────────────────────────────────────────────────────────
 
 def clean():
     print("Cleaning build artifacts...")
@@ -229,12 +386,16 @@ def clean():
             print(f"  Removed {target}")
 
 
+# ── Entry point ───────────────────────────────────────────────────────────────
+
 def main():
-    parser = argparse.ArgumentParser(description="Build ffl-mcp PyApp executable")
-    parser.add_argument("--clean", action="store_true", help="Remove build artifacts first")
-    parser.add_argument("--skip-wheel", action="store_true", help="Skip wheel build, reuse existing dist/*.whl")
-    parser.add_argument("--skip-download", action="store_true", help="Skip PyApp source download, require pyapp-src/ to exist")
-    parser.add_argument("--rebuild-dist", action="store_true", help="Force re-install packages into distribution even if cached")
+    parser = argparse.ArgumentParser(description="Build ffl-mcp binary and Windows installer")
+    parser.add_argument("--clean", action="store_true", help="Remove build artifacts and exit")
+    parser.add_argument("--skip-wheel", action="store_true", help="Reuse existing dist/*.whl")
+    parser.add_argument("--skip-download", action="store_true", help="Require pyapp-src/ to already exist")
+    parser.add_argument("--rebuild-dist", action="store_true", help="Force reinstall of packages into distribution")
+    parser.add_argument("--skip-installer", action="store_true", help="Skip Windows installer step")
+    parser.add_argument("--installer-only", action="store_true", help="Only build installer using existing dist/ffl-mcp.exe")
     args = parser.parse_args()
 
     if args.clean:
@@ -245,6 +406,14 @@ def main():
         print(f"ERROR: --skip-download requires {PYAPP_DIR}/ to exist", file=sys.stderr)
         sys.exit(1)
 
+    if args.installer_only:
+        exePath = DIST_DIR / "ffl-mcp.exe"
+        if not exePath.exists():
+            print(f"ERROR: --installer-only requires {exePath} to exist", file=sys.stderr)
+            sys.exit(1)
+        buildInstaller(exePath)
+        return
+
     if not args.skip_wheel:
         buildWheel()
 
@@ -253,7 +422,16 @@ def main():
 
     prepareDistribution(wheelPath, args.rebuild_dist)
     builtBinary = buildPyapp()
-    copyOutput(builtBinary)
+    exePath = copyOutput(builtBinary)
+
+    if not args.skip_installer:
+        buildInstaller(exePath)
+
+    print("\nDone!")
+    print(f"  Binary:    {(DIST_DIR / 'ffl-mcp.exe').resolve()}")
+    setupExe = DIST_DIR / "ffl-mcp-setup.exe"
+    if setupExe.exists():
+        print(f"  Installer: {setupExe.resolve()}")
 
 
 if __name__ == "__main__":
