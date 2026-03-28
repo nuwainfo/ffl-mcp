@@ -153,6 +153,20 @@ def resolveDefaultFflBin() -> str:
     return "ffl"
 
 
+# Python env vars that PyApp sets (pointing to its venv) which confuse ffl.com's
+# embedded Cosmopolitan Python runtime, causing it to look for static files in the
+# wrong location instead of its own /zip/ embedded filesystem.
+_PYAPP_LEAKED_VARS = ("PYTHONHOME", "PYTHONPATH", "PYTHONSTARTUP", "PYTHONDONTWRITEBYTECODE", "PYAPP")
+
+
+def buildFflEnv() -> Dict[str, str]:
+    """Return an environment for spawning ffl.com with PyApp-leaked Python vars removed."""
+    env = os.environ.copy()
+    for var in _PYAPP_LEAKED_VARS:
+        env.pop(var, None)
+    return env
+
+
 defaultWaitLinkSeconds = int(os.environ.get("FFL_WAIT_LINK_SECONDS", "20"))
 allowedBaseDir = os.environ.get("ALLOWED_BASE_DIR")
 fflRunMode = os.environ.get("FFL_RUN_MODE", "binary").lower()
@@ -733,6 +747,8 @@ def spawnFflAndWaitLink(
             logFile = open(logPath, "w")
             logger.info("Capturing ffl output for QR code to %s", logPath)
 
+    fflEnv = buildFflEnv()
+
     if useShell:
         commandText = shlex.join(command)
         process = subprocess.Popen(
@@ -742,6 +758,7 @@ def spawnFflAndWaitLink(
             stdout=logFile if logFile else subprocess.DEVNULL,
             stderr=logFile if logFile else subprocess.DEVNULL,
             cwd=os.path.dirname(__file__),
+            env=fflEnv,
         )
     else:
         process = subprocess.Popen(
@@ -751,6 +768,7 @@ def spawnFflAndWaitLink(
             stdout=logFile if logFile else subprocess.DEVNULL,
             stderr=logFile if logFile else subprocess.DEVNULL,
             cwd=os.path.dirname(__file__),
+            env=fflEnv,
         )
 
     if stdinBytes is not None and process.stdin is not None:
@@ -1184,6 +1202,8 @@ def fflDownload(
     # Use current working directory instead of script directory for downloads
     downloadCwd = os.getcwd()
 
+    fflEnv = buildFflEnv()
+
     try:
         if useShell:
             commandText = shlex.join(command)
@@ -1195,6 +1215,7 @@ def fflDownload(
                 text=True,
                 timeout=600,  # 10 minute timeout for downloads
                 cwd=downloadCwd,
+                env=fflEnv,
             )
         else:
             result = subprocess.run(
@@ -1205,6 +1226,7 @@ def fflDownload(
                 text=True,
                 timeout=600,  # 10 minute timeout for downloads
                 cwd=downloadCwd,
+                env=fflEnv,
             )
 
         if logFile:
@@ -1360,10 +1382,11 @@ def fflKeygen(
     logFile, logPath = setupDebugLogging(prefix="ffl_keygen_output_", customPath=fflDebugPath)
 
     try:
+        fflEnv = buildFflEnv()
         if useShell:
-            result = subprocess.run(shlex.join(command), shell=True, stdout=logFile, stderr=logFile, text=True, timeout=60)
+            result = subprocess.run(shlex.join(command), shell=True, stdout=logFile, stderr=logFile, text=True, timeout=60, env=fflEnv)
         else:
-            result = subprocess.run(command, shell=False, stdout=logFile, stderr=logFile, text=True, timeout=60)
+            result = subprocess.run(command, shell=False, stdout=logFile, stderr=logFile, text=True, timeout=60, env=fflEnv)
     finally:
         try:
             logFile.close()
@@ -1434,18 +1457,31 @@ def fflGetSessionEvents(sessionId: str, limit: int = 50) -> Dict[str, Any]:
 
 
 def main() -> None:
-    configureLogging()
+    os.environ.setdefault("FASTMCP_SHOW_CLI_BANNER", "false")
     parser = argparse.ArgumentParser()
     parser.add_argument("--transport", choices=["stdio", "http", "sse"], default="stdio")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument("--path", default="/mcp")
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Enable ffl debug logging: passes --log-level DEBUG to ffl and saves output to a log file. "
+             "Equivalent to setting FFL_DEBUG=1.",
+    )
     args = parser.parse_args()
 
+    if args.debug:
+        os.environ.setdefault("FFL_DEBUG", "1")
+        global fflDebugEnabled, fflDebugPath
+        fflDebugEnabled, fflDebugPath = parseFflDebug()
+
+    configureLogging()
+
     if args.transport == "stdio":
-        mcp.run()
+        mcp.run(show_banner=False)
     else:
-        mcp.run(transport=args.transport, host=args.host, port=args.port, path=args.path)
+        mcp.run(transport=args.transport, host=args.host, port=args.port, path=args.path, show_banner=False)
 
 
 if __name__ == "__main__":

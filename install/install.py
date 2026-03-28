@@ -109,11 +109,12 @@ def inferUvxFromSpec() -> Optional[str]:
 
     url = info.get("url")
     vcsInfo = info.get("vcs_info") or {}
-    
+
     if not isinstance(url, str) or not url:
         return None
+    # file:// URLs are local paths (e.g. bundled wheels) — useless as a uvx source
     if url.startswith("file://"):
-        return url
+        return None
 
     if url.startswith("git+"):
         return url
@@ -376,7 +377,16 @@ def main() -> None:
         print("Warning: ALLOWED_BASE_DIR is not set. This allows sharing any path.")
         print("Recommended: set --allowed-base-dir to restrict file sharing.")
 
-    name, entry = buildMcpServerEntry(args.serverName, uvxFrom, args.entrypoint, env)
+    # When running as a standalone PyApp binary, register the binary itself as
+    # the MCP server command so end-users don't need uvx or Python installed.
+    binaryPath = os.environ.get("FFL_MCP_BINARY")
+    if binaryPath:
+        entry: Dict[str, Any] = {"command": binaryPath, "args": []}
+        if env:
+            entry["env"] = env
+        name = args.serverName
+    else:
+        name, entry = buildMcpServerEntry(args.serverName, uvxFrom, args.entrypoint, env)
 
     if args.printOnly:
         print(json.dumps({name: entry}, ensure_ascii=True, indent=2))
@@ -446,7 +456,9 @@ def main() -> None:
 
     print(f"Server name: {args.serverName}")
 
-    if uvxFrom:
+    if binaryPath:
+        print(f"Binary: {binaryPath}")
+    elif uvxFrom:
         print(f"uvx source: {uvxFrom}")
     else:
         print("uvx source: PyPI (uvx ffl-mcp)")
