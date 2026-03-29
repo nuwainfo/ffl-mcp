@@ -16,22 +16,26 @@
 
 import argparse
 import base64
+import hashlib
 import json
 import logging
+import mimetypes
 import os
 import pathlib
+import platform
 import re
 import shlex
+import struct
 import subprocess
+import sys
 import tempfile
 import threading
 import time
 import uuid
-import platform
 
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Dict, List, Optional, Tuple, Union
-from urllib.parse import quote
+from urllib.parse import parse_qs, quote, urlparse
 
 from fastmcp import FastMCP
 
@@ -217,16 +221,25 @@ def parseBasicAuthHeader(headerValue: Optional[str]) -> Optional[Dict[str, str]]
     return {"userName": userName, "password": password}
 
 
+try:
+    from src.preview import generateThumbnail
+except ImportError:
+    from preview import generateThumbnail
+
+
 class HookRequestHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         logger.debug("Hook request: %s", format % args)
 
+    def _sendUnauthorized(self) -> None:
+        self.send_response(401)
+        self.send_header("WWW-Authenticate", 'Basic realm="ffl-mcp"')
+        self.end_headers()
+
     def do_POST(self):
         hookServer = self.server
         if not hookServer.isAuthorized(self.headers.get("Authorization")):
-            self.send_response(401)
-            self.send_header("WWW-Authenticate", 'Basic realm="ffl-mcp"')
-            self.end_headers()
+            self._sendUnauthorized()
             return
 
         if hookServer.path and self.path != hookServer.path:
@@ -259,7 +272,7 @@ class HookRequestHandler(BaseHTTPRequestHandler):
             return
 
         try:
-            hookServer.handleEvent(eventName, eventData)
+            eventResponse = hookServer.handleEvent(eventName, eventData)
         except Exception as exc:
             logger.warning("Hook handler error: %s", exc)
             self.send_response(500)
@@ -267,10 +280,58 @@ class HookRequestHandler(BaseHTTPRequestHandler):
             self.wfile.write(json.dumps({"error": f"handler error: {exc}"}).encode("utf-8"))
             return
 
+        responseBody = json.dumps(eventResponse if eventResponse is not None else {"status": "ok"}).encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(responseBody)))
         self.end_headers()
-        self.wfile.write(b'{"status":"ok"}')
+        self.wfile.write(responseBody)
+
+    def do_GET(self):
+        hookServer = self.server
+        if not hookServer.isAuthorized(self.headers.get("Authorization")):
+            self._sendUnauthorized()
+            return
+
+        parsed = urlparse(self.path)
+        args = parse_qs(parsed.query)
+
+        if parsed.path == "/manifest":
+            manifestData = hookServer.getManifestData()
+            body = json.dumps(manifestData).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
+        if parsed.path == "/thumb":
+            hashValue = args.get("hash", [None])[0]
+            if not hashValue:
+                self.send_response(400)
+                self.end_headers()
+                return
+            filePath = hookServer.resolveFileByHash(hashValue)
+            if not filePath:
+                self.send_response(404)
+                self.end_headers()
+                return
+            thumbResult = generateThumbnail(filePath)
+            if not thumbResult:
+                self.send_response(404)
+                self.end_headers()
+                return
+            thumbBytes, mimeType = thumbResult
+            self.send_response(200)
+            self.send_header("Content-Type", mimeType)
+            self.send_header("Content-Length", str(len(thumbBytes)))
+            self.end_headers()
+            self.wfile.write(thumbBytes)
+            return
+
+        self.send_response(404)
+        self.end_headers()
 
 
 class HookServer(ThreadingHTTPServer):
@@ -293,6 +354,10 @@ class HookServer(ThreadingHTTPServer):
         self._eventLock = threading.Lock()
         self._events: List[Dict[str, Any]] = []
         self._linkValue: Optional[str] = None
+        self._manifestEntries: List[Dict[str, Any]] = []
+        self._hashToEntry: Dict[str, Dict[str, Any]] = {}
+        self._arcnameToPath: Dict[str, str] = {}
+        self._sharedRoot: Optional[str] = None
         self._thread: Optional[threading.Thread] = None
         self._running = False
 
@@ -322,16 +387,133 @@ class HookServer(ThreadingHTTPServer):
         authPart = f"{quote(self.username)}:{quote(self.password)}@" if self.username else ""
         return f"http://{authPart}{self.host}:{self.port}{self.path}"
 
-    def handleEvent(self, eventName: str, eventData: Any) -> None:
+    def handleEvent(self, eventName: str, eventData: Any) -> Optional[Dict[str, Any]]:
         entry = {"event": eventName, "data": eventData, "timestamp": time.time()}
         with self._eventLock:
             self._events.append(entry)
             if len(self._events) > self.maxEvents:
                 self._events = self._events[-self.maxEvents :]
+
         if eventName == "/share/link/create" and isinstance(eventData, dict):
             linkValue = eventData.get("link") or eventData.get("shareLink")
             if isinstance(linkValue, str):
                 self._linkValue = linkValue
+            self._storeManifest(eventData)
+            return None
+
+        if eventName == "/hook/server/endpoints/register":
+            return {
+                "routes": [
+                    {"method": "GET", "path": "/manifest", "encryptResponse": True},
+                    {"method": "GET", "path": "/thumb", "encryptResponse": True},
+                ]
+            }
+
+        return None
+
+    @staticmethod
+    def _toNativePath(p: str) -> str:
+        """Convert a Cosmopolitan /C/Users/... path to C:\\Users\\... on Windows."""
+        if sys.platform == "win32" and p.startswith("/") and len(p) >= 3 and p[1].isalpha() and p[2] == "/":
+            return p[1].upper() + ":\\" + p[3:].replace("/", "\\")
+        return p
+
+    def _storeManifest(self, eventData: Dict[str, Any]) -> None:
+        manifestItems = eventData.get("manifest", [])
+        rawFilePath = eventData.get("filePath")
+
+        # filePath can be a string (single file/folder) or list (multiple files)
+        # Build arcname → native local path lookup for quick resolution
+        arcnameToPath: Dict[str, str] = {}
+        if isinstance(rawFilePath, list):
+            # Multiple files: build basename → native path map
+            for p in rawFilePath:
+                nativePath = self._toNativePath(p)
+                arcnameToPath[os.path.basename(nativePath)] = nativePath
+        elif isinstance(rawFilePath, str):
+            nativePath = self._toNativePath(rawFilePath)
+            rawFilePath = nativePath  # normalize for later use
+
+        entries: List[Dict[str, Any]] = []
+        hashMap: Dict[str, Dict[str, Any]] = {}
+        fileIndex = 0
+        for item in manifestItems:
+            if item.get("isDir", False):
+                continue
+            arcname = item.get("arcname", "")
+            mimeType, _ = mimetypes.guess_type(arcname)
+            if not mimeType:
+                mimeType = "application/octet-stream"
+            previewEntry = {
+                "index": fileIndex,
+                "segmentIndex": item.get("index", 0),
+                "name": arcname,
+                "hash": hashlib.blake2b(arcname.encode("utf-8"), digest_size=32).hexdigest(),
+                "size": item.get("size", 0),
+                "mtime": item.get("mtime", 0),
+                "mime": mimeType,
+                "dataOffset": item.get("data_offset", 0),
+            }
+            entries.append(previewEntry)
+            hashMap[previewEntry["hash"]] = previewEntry
+            fileIndex += 1
+        with self._eventLock:
+            self._sharedRoot = rawFilePath
+            self._arcnameToPath = arcnameToPath
+            self._manifestEntries = entries
+            self._hashToEntry = hashMap
+
+    def getManifestData(self) -> Dict[str, Any]:
+        with self._eventLock:
+            entries = list(self._manifestEntries)
+            sharedRoot = self._sharedRoot
+            linkValue = self._linkValue
+        uid = ""
+        if linkValue:
+            uid = urlparse(linkValue).path.strip("/").split("/")[0]
+        if isinstance(sharedRoot, list):
+            zipName = "shared.zip"
+        elif sharedRoot:
+            zipName = os.path.basename(os.path.normpath(sharedRoot)) + ".zip"
+        else:
+            zipName = "shared.zip"
+        return {
+            "uid": uid,
+            "zipName": zipName,
+            "zipSize": 0,
+            "count": len(entries),
+            "entries": entries,
+        }
+
+    def resolveFileByHash(self, hashValue: str) -> Optional[str]:
+        with self._eventLock:
+            entry = self._hashToEntry.get(hashValue)
+            sharedRoot = self._sharedRoot
+            arcnameToPath = dict(self._arcnameToPath)
+        if not entry:
+            return None
+        arcname = entry["name"]
+
+        # Multiple files: arcname is just the filename, look it up in the basename map
+        if arcnameToPath:
+            basename = os.path.basename(arcname)
+            nativePath = arcnameToPath.get(basename) or arcnameToPath.get(arcname)
+            if nativePath and os.path.isfile(nativePath):
+                return nativePath
+            return None
+
+        # Single folder: strip folder-name prefix from arcname
+        if not sharedRoot or isinstance(sharedRoot, list):
+            return None
+        sharedRootName = os.path.basename(os.path.normpath(sharedRoot))
+        if arcname.startswith(sharedRootName + "/"):
+            relativeName = arcname[len(sharedRootName) + 1:]
+        else:
+            relativeName = arcname
+        filePath = os.path.join(sharedRoot, relativeName.replace("/", os.sep))
+        if not os.path.isfile(filePath):
+            return None
+        return filePath
 
     def getLink(self) -> Optional[str]:
         return self._linkValue
@@ -851,7 +1033,7 @@ def spawnFflAndWaitLink(
 def fflShareText(
     text: str,
     name: str = "shared.txt",
-    e2ee: bool = True,
+    e2ee: bool = False,
     authUser: Optional[str] = None,
     authPassword: Optional[str] = None,
     maxDownloads: int = 1,
@@ -871,13 +1053,12 @@ def fflShareText(
 ) -> Dict[str, Any]:
     """
     Share text content using ffl. Returns a sessionId and link.
-    E2EE encryption is enabled by default for security. Set e2ee=False to disable.
     If qrInTerminal is True, also returns a QR code as ASCII art for terminal display.
 
     Args:
         text: Text content to share
         name: Download filename shown to recipient (default: shared.txt)
-        e2ee: Enable end-to-end encryption (default: True)
+        e2ee: Enable end-to-end encryption (default: False)
         authUser: HTTP Basic Auth username to protect the link
         authPassword: HTTP Basic Auth password to protect the link
         maxDownloads: Stop serving after N downloads (default: 1)
@@ -916,7 +1097,7 @@ def fflShareText(
 def fflShareBase64(
     dataB64: str,
     name: str = "data.bin",
-    e2ee: bool = True,
+    e2ee: bool = False,
     authUser: Optional[str] = None,
     authPassword: Optional[str] = None,
     maxDownloads: int = 1,
@@ -936,13 +1117,12 @@ def fflShareBase64(
 ) -> Dict[str, Any]:
     """
     Share arbitrary binary data (base64-encoded) using ffl. Returns a sessionId and link.
-    E2EE encryption is enabled by default for security. Set e2ee=False to disable.
     If qrInTerminal is True, also returns a QR code as ASCII art for terminal display.
 
     Args:
         dataB64: Base64-encoded binary data to share
         name: Download filename shown to recipient (default: data.bin)
-        e2ee: Enable end-to-end encryption (default: True)
+        e2ee: Enable end-to-end encryption (default: False)
         authUser: HTTP Basic Auth username to protect the link
         authPassword: HTTP Basic Auth password to protect the link
         maxDownloads: Stop serving after N downloads (default: 1)
@@ -981,7 +1161,7 @@ def fflShareBase64(
 def fflShareFile(
     path: str,
     name: Optional[str] = None,
-    e2ee: bool = True,
+    e2ee: bool = False,
     authUser: Optional[str] = None,
     authPassword: Optional[str] = None,
     maxDownloads: int = 1,
@@ -990,6 +1170,7 @@ def fflShareFile(
     hookUrl: Optional[str] = None,
     proxy: Optional[str] = None,
     qrInTerminal: bool = False,
+    preview: bool = False,
     exclude: Optional[str] = None,
     recipientAuth: Optional[str] = None,
     pickupCode: Optional[str] = None,
@@ -1006,13 +1187,13 @@ def fflShareFile(
 ) -> Dict[str, Any]:
     """
     Share a local file or folder using ffl. Respects ALLOWED_BASE_DIR when configured.
-    E2EE encryption is enabled by default for security. Set e2ee=False to disable.
     If qrInTerminal is True, also returns a QR code as ASCII art for terminal display.
 
     Args:
         path: Path to file or folder to share
         name: Custom download filename shown to recipient
-        e2ee: Enable end-to-end encryption (default: True)
+        e2ee: Enable end-to-end encryption (default: False)
+        preview: Open recipient's browser directly in preview mode — ideal for folders or multiple files so the recipient sees a file list before downloading (default: False)
         authUser: HTTP Basic Auth username to protect the link
         authPassword: HTTP Basic Auth password to protect the link
         maxDownloads: Stop serving after N downloads, P2P only (default: 1)
@@ -1042,7 +1223,7 @@ def fflShareFile(
         raise PermissionError(f"Path not allowed by ALLOWED_BASE_DIR: {path}")
 
     tempPaths: List[str] = []
-    return shareWithFfl(
+    result = shareWithFfl(
         str(sharePath), None, tempPaths, name, e2ee, authUser, authPassword,
         maxDownloads, timeoutSeconds, waitLinkSeconds, hookUrl, proxy, qrInTerminal,
         exclude=exclude, recipientAuth=recipientAuth, pickupCode=pickupCode,
@@ -1051,13 +1232,16 @@ def fflShareFile(
         forceRelay=forceRelay, upload=upload, resumeUpload=resumeUpload,
         vfs=vfs, preferredTunnel=preferredTunnel,
     )
+    if preview and isinstance(result.get("link"), str):
+        result["link"] = result["link"] + "?preview=true"
+    return result
 
 
 @mcp.tool
 def fflShareFiles(
     paths: List[str],
     name: Optional[str] = None,
-    e2ee: bool = True,
+    e2ee: bool = False,
     authUser: Optional[str] = None,
     authPassword: Optional[str] = None,
     maxDownloads: int = 1,
@@ -1066,6 +1250,7 @@ def fflShareFiles(
     hookUrl: Optional[str] = None,
     proxy: Optional[str] = None,
     qrInTerminal: bool = False,
+    preview: bool = False,
     exclude: Optional[str] = None,
     recipientAuth: Optional[str] = None,
     pickupCode: Optional[str] = None,
@@ -1081,12 +1266,12 @@ def fflShareFiles(
 ) -> Dict[str, Any]:
     """
     Share multiple local files at once using ffl. ffl auto-zips them into a single download.
-    E2EE encryption is enabled by default for security. Set e2ee=False to disable.
 
     Args:
         paths: List of local file paths to share together (auto-zipped by ffl)
         name: Custom download filename shown to recipient (e.g. 'release-v2.0.zip')
-        e2ee: Enable end-to-end encryption (default: True)
+        e2ee: Enable end-to-end encryption (default: False)
+        preview: Open recipient's browser directly in preview mode — shows a file list before downloading (default: False). Recommended when sharing multiple files so the recipient can inspect contents first.
         authUser: HTTP Basic Auth username to protect the link
         authPassword: HTTP Basic Auth password to protect the link
         maxDownloads: Stop serving after N downloads, P2P only (default: 1)
@@ -1119,7 +1304,7 @@ def fflShareFiles(
             raise PermissionError(f"Path not allowed by ALLOWED_BASE_DIR: {sharePath}")
 
     shareTargets = [str(p) for p in sharePaths]
-    return shareWithFfl(
+    result = shareWithFfl(
         shareTargets, None, [], name, e2ee, authUser, authPassword,
         maxDownloads, timeoutSeconds, waitLinkSeconds, hookUrl, proxy, qrInTerminal,
         exclude=exclude, recipientAuth=recipientAuth, pickupCode=pickupCode,
@@ -1128,6 +1313,9 @@ def fflShareFiles(
         forceRelay=forceRelay, upload=upload, resumeUpload=resumeUpload,
         preferredTunnel=preferredTunnel,
     )
+    if preview and isinstance(result.get("link"), str):
+        result["link"] = result["link"] + "?preview=true"
+    return result
 
 
 @mcp.tool
@@ -1454,6 +1642,7 @@ def fflGetSessionEvents(sessionId: str, limit: int = 50) -> Dict[str, Any]:
     if not hookServer:
         return {"ok": True, "sessionId": sessionId, "events": []}
     return {"ok": True, "sessionId": sessionId, "events": hookServer.getEvents(limit)}
+
 
 
 def main() -> None:

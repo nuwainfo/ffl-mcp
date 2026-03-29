@@ -4,13 +4,14 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ffl-mcp"
-version = "0.1.5"
+version = "0.1.9"
 description = "Local-only MCP server for ffl/ffl.com (APE)"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 dependencies = [
-  "fastmcp>=2,<3"
+  "fastmcp>=2,<3",
+  "comtypes>=1.0; sys_platform == 'win32'"
 ]
 
 [project.scripts]

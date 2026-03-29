@@ -130,8 +130,6 @@ uvx --from git+https://github.com/nuwainfo/ffl-mcp ffl-mcp
 
 ### Sharing
 
-All share tools use **E2EE by default** (`e2ee=True`). Set `qrInTerminal=True` to get a scannable ASCII QR code back.
-
 | Tool | Input |
 |---|---|
 | `fflShareText(text, name?, ...)` | Plain text |
@@ -143,7 +141,7 @@ All share tools use **E2EE by default** (`e2ee=True`). Set `qrInTerminal=True` t
 
 | Option | Default | Description |
 |---|---|---|
-| `e2ee` | `True` | End-to-end encryption |
+| `e2ee` | `False` | End-to-end encryption |
 | `qrInTerminal` | `False` | Return ASCII QR art (`qrCode` in response) |
 | `authUser` / `authPassword` | — | HTTP Basic Auth to protect the link |
 | `maxDownloads` | `1` | Stop serving after N downloads (P2P only) |
@@ -162,11 +160,12 @@ All share tools use **E2EE by default** (`e2ee=True`). Set `qrInTerminal=True` t
 
 **Additional options for `fflShareFile` / `fflShareFiles`:**
 
-| Option | Description |
-|---|---|
-| `exclude` | Glob or regex patterns to exclude, comma-separated — e.g. `*.pyc,__pycache__` or `re:\.env$` |
-| `vfs` | Expose as VFS server (`vfs://` URI) — `fflShareFile` only |
-| `preferredTunnel` | Set preferred tunnel for this and future runs — `cloudflare`, `ngrok`, `bore`, etc. |
+| Option | Default | Description |
+|---|---|---|
+| `preview` | `False` | Append `?preview=true` to the link — recipient's browser opens in preview mode showing a file list before downloading. Recommended for folders and multi-file shares. |
+| `exclude` | — | Glob or regex patterns to exclude, comma-separated — e.g. `*.pyc,__pycache__` or `re:\.env$` |
+| `vfs` | `False` | Expose as VFS server (`vfs://` URI) — `fflShareFile` only |
+| `preferredTunnel` | — | Set preferred tunnel for this and future runs — `cloudflare`, `ngrok`, `bore`, etc. |
 
 **Response fields:** `sessionId`, `link`, `pid`, `qrCode?` (ASCII art when `qrInTerminal=True`), `debugLogPath?`
 

@@ -1,1 +1,2 @@
 fastmcp
+comtypes; sys_platform == "win32"

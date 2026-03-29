@@ -57,7 +57,7 @@ from pathlib import Path
 from typing import Optional
 
 # ── Application metadata ──────────────────────────────────────────────────────
-APP_VERSION = "0.1.5"
+APP_VERSION = "0.1.9"
 APP_NAME = "FastFileLink MCP"
 APP_PUBLISHER = "FastFileLink"
 APP_URL = "https://fastfilelink.com"
