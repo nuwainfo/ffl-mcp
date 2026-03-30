@@ -47,6 +47,7 @@ How the binary is built:
 import argparse
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -57,7 +58,14 @@ from pathlib import Path
 from typing import Optional
 
 # ── Application metadata ──────────────────────────────────────────────────────
-APP_VERSION = "0.1.9"
+def _readVersion() -> str:
+    toml = Path(__file__).parent / "pyproject.toml"
+    match = re.search(r'^version\s*=\s*"([^"]+)"', toml.read_text(), re.MULTILINE)
+    if not match:
+        raise RuntimeError("Could not find version in pyproject.toml")
+    return match.group(1)
+
+APP_VERSION = _readVersion()
 APP_NAME = "FastFileLink MCP"
 APP_PUBLISHER = "FastFileLink"
 APP_URL = "https://fastfilelink.com"
