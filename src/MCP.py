@@ -358,6 +358,8 @@ class HookServer(ThreadingHTTPServer):
         self._hashToEntry: Dict[str, Dict[str, Any]] = {}
         self._arcnameToPath: Dict[str, str] = {}
         self._sharedRoot: Optional[str] = None
+        self._zipSize: Optional[int] = None
+        self._registeredFileName: Optional[str] = None
         self._thread: Optional[threading.Thread] = None
         self._running = False
 
@@ -395,13 +397,18 @@ class HookServer(ThreadingHTTPServer):
                 self._events = self._events[-self.maxEvents :]
 
         if eventName == "/share/link/create" and isinstance(eventData, dict):
-            linkValue = eventData.get("link") or eventData.get("shareLink")
-            if isinstance(linkValue, str):
-                self._linkValue = linkValue
             self._storeManifest(eventData)
             return None
 
         if eventName == "/hook/server/endpoints/register":
+            if isinstance(eventData, dict):
+                rawFileSize = eventData.get("fileSize")
+                rawFileName = eventData.get("fileName")
+                with self._eventLock:
+                    if isinstance(rawFileSize, (int, float)) and rawFileSize > 0:
+                        self._zipSize = int(rawFileSize)
+                    if isinstance(rawFileName, str) and rawFileName:
+                        self._registeredFileName = rawFileName
             return {
                 "routes": [
                     {"method": "GET", "path": "/manifest", "encryptResponse": True},
@@ -419,6 +426,7 @@ class HookServer(ThreadingHTTPServer):
         return p
 
     def _storeManifest(self, eventData: Dict[str, Any]) -> None:
+        linkValue = eventData.get("link")
         manifestItems = eventData.get("manifest", [])
         rawFilePath = eventData.get("filePath")
 
@@ -458,6 +466,8 @@ class HookServer(ThreadingHTTPServer):
             hashMap[previewEntry["hash"]] = previewEntry
             fileIndex += 1
         with self._eventLock:
+            if isinstance(linkValue, str):
+                self._linkValue = linkValue
             self._sharedRoot = rawFilePath
             self._arcnameToPath = arcnameToPath
             self._manifestEntries = entries
@@ -468,19 +478,55 @@ class HookServer(ThreadingHTTPServer):
             entries = list(self._manifestEntries)
             sharedRoot = self._sharedRoot
             linkValue = self._linkValue
+            zipSize = self._zipSize or 0
+            registeredFileName = self._registeredFileName
         uid = ""
         if linkValue:
             uid = urlparse(linkValue).path.strip("/").split("/")[0]
-        if isinstance(sharedRoot, list):
-            zipName = "shared.zip"
+        if registeredFileName:
+            baseName = os.path.basename(registeredFileName)
+            zipName = baseName if baseName.lower().endswith(".zip") else baseName + ".zip"
+        elif isinstance(sharedRoot, list):
+            zipName = "archive.zip"
         elif sharedRoot:
             zipName = os.path.basename(os.path.normpath(sharedRoot)) + ".zip"
         else:
-            zipName = "shared.zip"
+            zipName = "archive.zip"
+
+        # Single file share: ffl doesn't include manifest in the shareLinkCreate event
+        # (FileSourceReader.supportManifest = False), so entries will be empty.
+        # Synthesize one entry from the registration context so the preview popup
+        # shows the correct file name and size.
+        if not entries and registeredFileName and zipSize > 0:
+            singleName = os.path.basename(registeredFileName)
+            singleMime, _ = mimetypes.guess_type(singleName)
+            if not singleMime:
+                singleMime = "application/octet-stream"
+            entries = [{
+                "index": 0,
+                "segmentIndex": 0,
+                "name": singleName,
+                "hash": hashlib.blake2b(singleName.encode("utf-8"), digest_size=32).hexdigest(),
+                "size": zipSize,
+                "mtime": 0,
+                "mime": singleMime,
+                "dataOffset": 0,
+            }]
+            zipName = singleName  # show the real filename, not a .zip name
+
+        # Fallback: estimate zipSize from entries when registration event didn't
+        # provide fileSize (older ffl binary). The last entry's dataOffset + size
+        # gives the total byte length of the ZIP archive stream.
+        if zipSize == 0 and entries:
+            lastEntry = max(entries, key=lambda e: e.get("dataOffset", 0))
+            estimated = lastEntry.get("dataOffset", 0) + lastEntry.get("size", 0)
+            if estimated > 0:
+                zipSize = estimated
+
         return {
             "uid": uid,
             "zipName": zipName,
-            "zipSize": 0,
+            "zipSize": zipSize,
             "count": len(entries),
             "entries": entries,
         }
@@ -915,43 +961,20 @@ def spawnFflAndWaitLink(
     # Setup output capture (for debug or QR code)
     logFile = None
     logPath = None
-    captureOutput = fflDebugEnabled or qrInTerminal
-    if captureOutput:
-        if fflDebugEnabled:
-            # Use custom debug path if provided, otherwise create temp file
-            logFile, logPath = setupDebugLogging(tempPaths if not fflDebugPath else None, "ffl_output_", fflDebugPath)
-        else:
-            # QR code capture only (not debug mode)
-            logTemp = tempfile.NamedTemporaryFile(prefix="ffl_output_", suffix=".log", delete=False, mode="w")
-            logPath = logTemp.name
-            logTemp.close()
-            tempPaths.append(logPath)
-            logFile = open(logPath, "w")
-            logger.info("Capturing ffl output for QR code to %s", logPath)
+    if fflDebugEnabled or qrInTerminal:
+        logFile, logPath = setupDebugLogging(tempPaths if not fflDebugPath else None, "ffl_output_", fflDebugPath)
 
     fflEnv = buildFflEnv()
-
-    if useShell:
-        commandText = shlex.join(command)
-        process = subprocess.Popen(
-            commandText,
-            shell=True,
-            stdin=subprocess.PIPE if stdinBytes is not None else None,
-            stdout=logFile if logFile else subprocess.DEVNULL,
-            stderr=logFile if logFile else subprocess.DEVNULL,
-            cwd=os.path.dirname(__file__),
-            env=fflEnv,
-        )
-    else:
-        process = subprocess.Popen(
-            command,
-            shell=False,
-            stdin=subprocess.PIPE if stdinBytes is not None else None,
-            stdout=logFile if logFile else subprocess.DEVNULL,
-            stderr=logFile if logFile else subprocess.DEVNULL,
-            cwd=os.path.dirname(__file__),
-            env=fflEnv,
-        )
+    commandArg = shlex.join(command) if useShell else command
+    process = subprocess.Popen(
+        commandArg,
+        shell=useShell,
+        stdin=subprocess.PIPE if stdinBytes is not None else None,
+        stdout=logFile if logFile else subprocess.DEVNULL,
+        stderr=logFile if logFile else subprocess.DEVNULL,
+        cwd=os.path.dirname(__file__),
+        env=fflEnv,
+    )
 
     if stdinBytes is not None and process.stdin is not None:
         process.stdin.write(stdinBytes)
@@ -1393,29 +1416,17 @@ def fflDownload(
     fflEnv = buildFflEnv()
 
     try:
-        if useShell:
-            commandText = shlex.join(command)
-            result = subprocess.run(
-                commandText,
-                shell=True,
-                stdout=logFile,
-                stderr=logFile,
-                text=True,
-                timeout=600,  # 10 minute timeout for downloads
-                cwd=downloadCwd,
-                env=fflEnv,
-            )
-        else:
-            result = subprocess.run(
-                command,
-                shell=False,
-                stdout=logFile,
-                stderr=logFile,
-                text=True,
-                timeout=600,  # 10 minute timeout for downloads
-                cwd=downloadCwd,
-                env=fflEnv,
-            )
+        commandArg = shlex.join(command) if useShell else command
+        result = subprocess.run(
+            commandArg,
+            shell=useShell,
+            stdout=logFile,
+            stderr=logFile,
+            text=True,
+            timeout=600,
+            cwd=downloadCwd,
+            env=fflEnv,
+        )
 
         if logFile:
             logFile.close()
@@ -1571,10 +1582,8 @@ def fflKeygen(
 
     try:
         fflEnv = buildFflEnv()
-        if useShell:
-            result = subprocess.run(shlex.join(command), shell=True, stdout=logFile, stderr=logFile, text=True, timeout=60, env=fflEnv)
-        else:
-            result = subprocess.run(command, shell=False, stdout=logFile, stderr=logFile, text=True, timeout=60, env=fflEnv)
+        commandArg = shlex.join(command) if useShell else command
+        result = subprocess.run(commandArg, shell=useShell, stdout=logFile, stderr=logFile, text=True, timeout=60, env=fflEnv)
     finally:
         try:
             logFile.close()

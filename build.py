@@ -415,6 +415,10 @@ def main():
         return
 
     if not args.skip_wheel:
+        if args.rebuild_dist:
+            for oldWheel in DIST_DIR.glob("ffl_mcp-*.whl"):
+                oldWheel.unlink()
+                print(f"  Removed stale wheel: {oldWheel}")
         buildWheel()
 
     wheelPath = findWheel()

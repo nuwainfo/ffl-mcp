@@ -855,5 +855,232 @@ class HookServerPreviewTest(unittest.TestCase):
         self.assertEqual(ctx.exception.code, 401)
 
 
+# ---------------------------------------------------------------------------
+# zipSize from /hook/server/endpoints/register context
+# ---------------------------------------------------------------------------
+
+class ManifestZipSizeTest(unittest.TestCase):
+    """
+    Tests that /manifest returns the correct zipSize sourced from the
+    fileSize field in the /hook/server/endpoints/register event context
+    (= server.reader.size = SegmentIndex.totalSize in ffl).
+    """
+
+    def setUp(self):
+        self.hookServer = MCP.HookServer(
+            host="127.0.0.1", port=0, path="/events",
+            username="ffl-mcp", password="test-secret", maxEvents=100,
+        )
+        self.hookServer.start()
+
+    def tearDown(self):
+        self.hookServer.stop()
+
+    def _registerAndShare(self, fileName, fileSize, manifestItems):
+        _hookPost(self.hookServer, "/hook/server/endpoints/register", {
+            "fileName": fileName,
+            "fileSize": fileSize,
+        })
+        _hookPost(self.hookServer, "/share/link/create", {
+            "link": "https://ffl.example.com/testXYZ",
+            "filePath": [f"/C/Users/test/{fileName}"],
+            "manifest": manifestItems,
+        })
+
+    def testZipSizeFromRegistration(self):
+        """zipSize must equal the fileSize from the registration event."""
+        self._registerAndShare("archive.zip", 80_000_000, [
+            {"arcname": "archive/a.mp4", "size": 50_000_000, "mtime": 0, "index": 0, "isDir": False, "data_offset": 0},
+            {"arcname": "archive/b.jpg", "size": 30_000_000, "mtime": 0, "index": 1, "isDir": False, "data_offset": 50_200_000},
+        ])
+        with _hookGet(self.hookServer, "/manifest") as resp:
+            data = json.loads(resp.read())
+        self.assertEqual(data["zipSize"], 80_000_000)
+
+    def testZipSizeFromEntriesWhenNoRegistration(self):
+        """When no registration event fires, zipSize must be estimated from entries' dataOffset+size."""
+        _hookPost(self.hookServer, "/share/link/create", {
+            "link": "https://ffl.example.com/testXYZ",
+            "filePath": ["/C/Users/test/a.mp4"],
+            "manifest": [
+                {"arcname": "archive/a.mp4", "size": 10_000_000, "mtime": 0, "index": 0, "isDir": False, "data_offset": 0},
+            ],
+        })
+        with _hookGet(self.hookServer, "/manifest") as resp:
+            data = json.loads(resp.read())
+        self.assertEqual(data["zipSize"], 10_000_000)
+
+    def testZipNameFromRegistration(self):
+        """zipName must use fileName from registration context."""
+        self._registerAndShare("my_backup.zip", 1_000_000, [
+            {"arcname": "my_backup/a.txt", "size": 100, "mtime": 0, "index": 0, "isDir": False, "data_offset": 0},
+        ])
+        with _hookGet(self.hookServer, "/manifest") as resp:
+            data = json.loads(resp.read())
+        self.assertEqual(data["zipName"], "my_backup.zip")
+
+    def testRegistrationFileSizeZeroIgnored(self):
+        """fileSize=0 in registration must not set _zipSize; fallback estimates from entries."""
+        _hookPost(self.hookServer, "/hook/server/endpoints/register", {
+            "fileName": "archive.zip",
+            "fileSize": 0,
+        })
+        _hookPost(self.hookServer, "/share/link/create", {
+            "link": "https://ffl.example.com/testXYZ",
+            "filePath": ["/C/Users/test/a.mp4"],
+            "manifest": [
+                {"arcname": "archive/a.mp4", "size": 10_000_000, "mtime": 0, "index": 0, "isDir": False, "data_offset": 0},
+            ],
+        })
+        with _hookGet(self.hookServer, "/manifest") as resp:
+            data = json.loads(resp.read())
+        # _zipSize stays 0 (fileSize=0 ignored), fallback computes 0+10_000_000
+        self.assertEqual(data["zipSize"], 10_000_000)
+
+    def testRegistrationFileSizeNoneIgnored(self):
+        """fileSize absent in registration must not crash; fallback estimates from entries."""
+        _hookPost(self.hookServer, "/hook/server/endpoints/register", {
+            "fileName": "archive.zip",
+        })
+        _hookPost(self.hookServer, "/share/link/create", {
+            "link": "https://ffl.example.com/testXYZ",
+            "filePath": ["/C/Users/test/a.mp4"],
+            "manifest": [
+                {"arcname": "archive/a.mp4", "size": 10_000_000, "mtime": 0, "index": 0, "isDir": False, "data_offset": 0},
+            ],
+        })
+        with _hookGet(self.hookServer, "/manifest") as resp:
+            data = json.loads(resp.read())
+        # _zipSize stays 0 (no fileSize in registration), fallback computes 0+10_000_000
+        self.assertEqual(data["zipSize"], 10_000_000)
+
+    def testZipSizeFromEntriesWhenRegistrationMissingFileSize(self):
+        """When registration has no fileSize, zipSize is estimated from entries' max(dataOffset+size)."""
+        # Simulates older ffl binary that omits fileSize from registration context.
+        _hookPost(self.hookServer, "/hook/server/endpoints/register", {
+            "fileName": "archive.zip",
+        })
+        _hookPost(self.hookServer, "/share/link/create", {
+            "link": "https://ffl.example.com/testXYZ",
+            "filePath": ["/C/Users/test/a.mp4", "/C/Users/test/b.mp4", "/C/Users/test/c.mp4"],
+            "manifest": [
+                {"arcname": "archive/a.mp4", "size": 119135942, "mtime": 0, "index": 0, "isDir": False, "data_offset": 49},
+                {"arcname": "archive/b.mp4", "size": 59796177,  "mtime": 0, "index": 1, "isDir": False, "data_offset": 119135991},
+                {"arcname": "archive/c.mp4", "size": 54547672,  "mtime": 0, "index": 2, "isDir": False, "data_offset": 178932168},
+            ],
+        })
+        with _hookGet(self.hookServer, "/manifest") as resp:
+            data = json.loads(resp.read())
+        # Expected: max(dataOffset) + size = 178932168 + 54547672 = 233479840
+        self.assertEqual(data["zipSize"], 233479840)
+
+
+# ---------------------------------------------------------------------------
+# Single-file share: synthetic manifest entry
+# ---------------------------------------------------------------------------
+
+class SingleFileManifestTest(unittest.TestCase):
+    """
+    Tests for single-file shares where ffl uses FileSourceReader
+    (supportManifest = False) and emits no manifest in shareLinkCreate.
+    The hook server must synthesize one entry from the registration context.
+    """
+
+    def setUp(self):
+        self.hookServer = MCP.HookServer(
+            host="127.0.0.1", port=0, path="/events",
+            username="ffl-mcp", password="test-secret", maxEvents=100,
+        )
+        self.hookServer.start()
+
+    def tearDown(self):
+        self.hookServer.stop()
+
+    def _sendSingleFileShare(self, fileName, fileSize, link="https://ffl.example.com/abc123"):
+        _hookPost(self.hookServer, "/hook/server/endpoints/register", {
+            "fileName": fileName,
+            "fileSize": fileSize,
+        })
+        # No 'manifest' key — FileSourceReader doesn't emit entries
+        _hookPost(self.hookServer, "/share/link/create", {
+            "link": link,
+            "filePath": f"/C/Users/test/{fileName}",
+        })
+
+    def testSyntheticEntryCreated(self):
+        """Single file with no manifest entries must produce one synthetic entry."""
+        self._sendSingleFileShare("video.mp4", 28_000_000)
+        with _hookGet(self.hookServer, "/manifest") as resp:
+            data = json.loads(resp.read())
+        self.assertEqual(data["count"], 1)
+        self.assertEqual(len(data["entries"]), 1)
+
+    def testSyntheticEntryName(self):
+        """Synthetic entry name must be the registered fileName."""
+        self._sendSingleFileShare("video.mp4", 28_000_000)
+        with _hookGet(self.hookServer, "/manifest") as resp:
+            data = json.loads(resp.read())
+        self.assertEqual(data["entries"][0]["name"], "video.mp4")
+
+    def testSyntheticEntrySize(self):
+        """Synthetic entry size must equal the registered fileSize."""
+        self._sendSingleFileShare("video.mp4", 28_000_000)
+        with _hookGet(self.hookServer, "/manifest") as resp:
+            data = json.loads(resp.read())
+        self.assertEqual(data["entries"][0]["size"], 28_000_000)
+
+    def testSyntheticEntryMime(self):
+        """Synthetic entry mime must be detected from the file extension."""
+        self._sendSingleFileShare("video.mp4", 28_000_000)
+        with _hookGet(self.hookServer, "/manifest") as resp:
+            data = json.loads(resp.read())
+        self.assertEqual(data["entries"][0]["mime"], "video/mp4")
+
+    def testZipSizeEqualsFileSize(self):
+        """zipSize for a single file must equal the registered fileSize."""
+        self._sendSingleFileShare("video.mp4", 28_000_000)
+        with _hookGet(self.hookServer, "/manifest") as resp:
+            data = json.loads(resp.read())
+        self.assertEqual(data["zipSize"], 28_000_000)
+
+    def testZipNameIsFilename(self):
+        """zipName for a single file must be the actual filename (not a .zip name)."""
+        self._sendSingleFileShare("video.mp4", 28_000_000)
+        with _hookGet(self.hookServer, "/manifest") as resp:
+            data = json.loads(resp.read())
+        self.assertEqual(data["zipName"], "video.mp4")
+
+    def testUnicodeFilename(self):
+        """Synthetic entry must handle unicode filenames correctly."""
+        self._sendSingleFileShare("迷因歌曲-黑雪之歌2.mp4", 28_000_000)
+        with _hookGet(self.hookServer, "/manifest") as resp:
+            data = json.loads(resp.read())
+        self.assertEqual(data["entries"][0]["name"], "迷因歌曲-黑雪之歌2.mp4")
+        self.assertEqual(data["entries"][0]["mime"], "video/mp4")
+
+    def testHashMatchesBlake2b(self):
+        """Synthetic entry hash must match blake2b(fileName, digest_size=32)."""
+        self._sendSingleFileShare("video.mp4", 28_000_000)
+        with _hookGet(self.hookServer, "/manifest") as resp:
+            data = json.loads(resp.read())
+        expected = hashlib.blake2b("video.mp4".encode("utf-8"), digest_size=32).hexdigest()
+        self.assertEqual(data["entries"][0]["hash"], expected)
+
+    def testNoSyntheticEntryWhenFileSizeZero(self):
+        """fileSize=0 in registration must not create a synthetic entry."""
+        _hookPost(self.hookServer, "/hook/server/endpoints/register", {
+            "fileName": "video.mp4",
+            "fileSize": 0,
+        })
+        _hookPost(self.hookServer, "/share/link/create", {
+            "link": "https://ffl.example.com/abc123",
+            "filePath": "/C/Users/test/video.mp4",
+        })
+        with _hookGet(self.hookServer, "/manifest") as resp:
+            data = json.loads(resp.read())
+        self.assertEqual(data["count"], 0)
+        self.assertEqual(data["zipSize"], 0)
+
+
 if __name__ == "__main__":
     unittest.main()
