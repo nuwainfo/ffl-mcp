@@ -72,7 +72,7 @@ uvx --from git+https://github.com/nuwainfo/ffl-mcp install
 Targets can be controlled with `--target` (default: all):
 
 ```bash
-uvx --from git+https://github.com/nuwainfo/ffl-mcp install --target claude-desktop,codex-cli
+uvx --from git+https://github.com/nuwainfo/ffl-mcp install --target claude-desktop,codex-desktop,codex-cli
 ```
 
 ```bash
@@ -80,11 +80,13 @@ uvx --from git+https://github.com/nuwainfo/ffl-mcp install --print
 ```
 
 If Claude Code CLI is installed, the installer also runs `claude mcp add` automatically (user scope).
+The installer also writes Codex MCP config to `~/.codex/config.toml` for Codex Desktop/CLI/IDE.
 If Codex CLI is installed, the installer also runs `codex mcp add` automatically.
-For other MCP clients or custom config paths, pass the file:
+For custom config paths, pass the file:
 
 ```bash
 uvx --from git+https://github.com/nuwainfo/ffl-mcp install --config /path/to/claude_desktop_config.json
+uvx --from git+https://github.com/nuwainfo/ffl-mcp install --codex-config /path/to/codex/config.toml
 ```
 
 ### Run directly (development)
@@ -154,6 +156,9 @@ uvx --from git+https://github.com/nuwainfo/ffl-mcp ffl-mcp
 | `receipt` | — | Email notification when recipient downloads |
 | `receiptConfirm` | — | Require recipient confirmation before download; pass a message or `""` |
 | `forceRelay` | `False` | Disable WebRTC, route all traffic through tunnel |
+| `port` | — | Local HTTP server port (auto-detect by default). Useful with fixed tunnels. |
+| `invite` | `False` | Open the ffl invite page in a local browser with the generated sharing link. |
+| `enableReporting` | `False` | Enable ffl diagnostic error reporting. Disabled by default. |
 | `upload` | — | Upload to FFL server instead of P2P — e.g. `"1 day"`, `"6 hours"` (requires Standard+ account) |
 | `resumeUpload` | `False` | Resume an interrupted upload |
 | `proxy` | — | Proxy URL e.g. `socks5://127.0.0.1:9050` |
@@ -164,6 +169,7 @@ uvx --from git+https://github.com/nuwainfo/ffl-mcp ffl-mcp
 |---|---|---|
 | `preview` | `False` | Append `?preview=true` to the link — recipient's browser opens in preview mode showing a file list before downloading. Recommended for folders and multi-file shares. |
 | `exclude` | — | Glob or regex patterns to exclude, comma-separated — e.g. `*.pyc,__pycache__` or `re:\.env$` |
+| `pause` | — | Pause server upload at a percentage from 1 to 99. Requires `upload`. |
 | `vfs` | `False` | Expose as VFS server (`vfs://` URI) — `fflShareFile` only |
 | `preferredTunnel` | — | Set preferred tunnel for this and future runs — `cloudflare`, `ngrok`, `bore`, etc. |
 
@@ -173,7 +179,8 @@ uvx --from git+https://github.com/nuwainfo/ffl-mcp ffl-mcp
 
 ```
 fflDownload(url, outputPath?, resume?, authUser?, authPassword?,
-            recipientAuth?, pickupCode?, recipientPrivateKey?, proxy?)
+            recipientAuth?, pickupCode?, recipientPrivateKey?, proxy?,
+            enableReporting?)
   -> {ok, returncode, outputPath?, transferMode?, transferInfo?, message?, ...}
 ```
 
@@ -186,6 +193,7 @@ Downloads from FastFileLink URLs (WebRTC P2P when possible, HTTP fallback) or an
 | `http_direct` | Regular HTTP download (non-FastFileLink URL) |
 
 For authenticated links: pass `recipientAuth` + `pickupCode` (pickup mode) or `recipientPrivateKey` (pubkey mode).
+Set `enableReporting=True` only when you want to opt into ffl diagnostic error reporting for troubleshooting.
 
 ### Keygen
 

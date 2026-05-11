@@ -60,6 +60,15 @@ class ToolSignatureTest(unittest.TestCase):
     def testFflShareTextHasForceRelay(self):
         self.assertIn("forceRelay", self._params(MCP.fflShareText))
 
+    def testFflShareTextHasPort(self):
+        self.assertIn("port", self._params(MCP.fflShareText))
+
+    def testFflShareTextHasInvite(self):
+        self.assertIn("invite", self._params(MCP.fflShareText))
+
+    def testFflShareTextHasEnableReporting(self):
+        self.assertIn("enableReporting", self._params(MCP.fflShareText))
+
     # --- fflShareBase64 ---
 
     def testFflShareBase64HasRecipientAuth(self):
@@ -67,6 +76,15 @@ class ToolSignatureTest(unittest.TestCase):
 
     def testFflShareBase64HasForceRelay(self):
         self.assertIn("forceRelay", self._params(MCP.fflShareBase64))
+
+    def testFflShareBase64HasPort(self):
+        self.assertIn("port", self._params(MCP.fflShareBase64))
+
+    def testFflShareBase64HasInvite(self):
+        self.assertIn("invite", self._params(MCP.fflShareBase64))
+
+    def testFflShareBase64HasEnableReporting(self):
+        self.assertIn("enableReporting", self._params(MCP.fflShareBase64))
 
     # --- fflShareFile ---
 
@@ -91,6 +109,18 @@ class ToolSignatureTest(unittest.TestCase):
     def testFflShareFileHasRecipientAuth(self):
         self.assertIn("recipientAuth", self._params(MCP.fflShareFile))
 
+    def testFflShareFileHasPort(self):
+        self.assertIn("port", self._params(MCP.fflShareFile))
+
+    def testFflShareFileHasInvite(self):
+        self.assertIn("invite", self._params(MCP.fflShareFile))
+
+    def testFflShareFileHasPause(self):
+        self.assertIn("pause", self._params(MCP.fflShareFile))
+
+    def testFflShareFileHasEnableReporting(self):
+        self.assertIn("enableReporting", self._params(MCP.fflShareFile))
+
     # --- fflDownload ---
 
     def testFflDownloadHasRecipientAuth(self):
@@ -101,6 +131,9 @@ class ToolSignatureTest(unittest.TestCase):
 
     def testFflDownloadHasRecipientPrivateKey(self):
         self.assertIn("recipientPrivateKey", self._params(MCP.fflDownload))
+
+    def testFflDownloadHasEnableReporting(self):
+        self.assertIn("enableReporting", self._params(MCP.fflDownload))
 
     # --- fflShareFiles ---
 
@@ -124,6 +157,18 @@ class ToolSignatureTest(unittest.TestCase):
 
     def testFflShareFilesHasExclude(self):
         self.assertIn("exclude", self._params(MCP.fflShareFiles))
+
+    def testFflShareFilesHasPort(self):
+        self.assertIn("port", self._params(MCP.fflShareFiles))
+
+    def testFflShareFilesHasInvite(self):
+        self.assertIn("invite", self._params(MCP.fflShareFiles))
+
+    def testFflShareFilesHasPause(self):
+        self.assertIn("pause", self._params(MCP.fflShareFiles))
+
+    def testFflShareFilesHasEnableReporting(self):
+        self.assertIn("enableReporting", self._params(MCP.fflShareFiles))
 
     # --- fflKeygen ---
 

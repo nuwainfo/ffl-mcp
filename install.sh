@@ -74,7 +74,7 @@ if [ -n "$DOWNLOAD_URL" ]; then
     && curl -fL --retry 3 -o "$TMP_BIN" "$DOWNLOAD_URL" \
     || wget -O "$TMP_BIN" "$DOWNLOAD_URL"
   chmod +x "$TMP_BIN"
-  echo "Registering MCP server with Claude..."
+  echo "Registering MCP server with Claude and Codex..."
   "$TMP_BIN" install
 else
   echo "No platform binary found for ${OS}/${ARCH} in release ${TAG} -- falling back to uvx."
@@ -90,4 +90,4 @@ else
 fi
 
 echo ""
-echo "Done! Restart Claude to connect the ffl-mcp server."
+echo "Done! Restart Claude/Codex to connect the ffl-mcp server."

@@ -265,7 +265,8 @@ def findNsis() -> Optional[Path]:
 def generateInstallScript() -> str:
     """PowerShell script run at install time.
 
-    Registers ffl-mcp directly in Claude Desktop JSON config and Claude Code CLI
+    Registers ffl-mcp directly in Claude Desktop JSON config, Codex config,
+    Claude Code CLI, and Codex CLI
     without invoking ffl-mcp.exe, so there is no PyApp extraction hang during install.
     PyApp extraction happens on first actual use of the MCP server instead.
     """
@@ -297,13 +298,41 @@ def generateInstallScript() -> str:
         "    [System.IO.File]::WriteAllText($configPath, ($cfg | ConvertTo-Json -Depth 20), $utf8NoBom)",
         "} catch {}",
         "",
-        "# 2. Claude Code CLI (best-effort)",
+        "# 2. Codex config (shared by Codex Desktop/CLI/IDE)",
+        "try {",
+        "    $codexConfigPath = Join-Path $env:USERPROFILE '.codex\\config.toml'",
+        "    $tomlBinaryPath = $binaryPath.Replace('\\', '\\\\').Replace('\"', '\\\"')",
+        f"    $serverToml = \"`n[mcp_servers.{MCP_SERVER_NAME}]`ncommand = `\"$tomlBinaryPath`\"`nargs = []`n\"",
+        "    if (Test-Path $codexConfigPath) {",
+        "        $codexConfig = Get-Content $codexConfigPath -Raw",
+        "    } else {",
+        "        $codexConfig = ''",
+        "    }",
+        f"    $pattern = '(?ms)^\\[mcp_servers\\.{MCP_SERVER_NAME}(?:\\.[^\\]]+)?\\]\\r?\\n.*?(?=^\\[|\\z)'",
+        "    $codexConfig = [regex]::Replace($codexConfig, $pattern, '').TrimEnd()",
+        "    if ($codexConfig.Length -gt 0) { $codexConfig = $codexConfig + \"`n`n\" + $serverToml } else { $codexConfig = $serverToml.TrimStart() }",
+        "    $parent = Split-Path $codexConfigPath -Parent",
+        "    if (-not (Test-Path $parent)) { New-Item -ItemType Directory -Path $parent -Force | Out-Null }",
+        "    $utf8NoBom = New-Object System.Text.UTF8Encoding $false",
+        "    [System.IO.File]::WriteAllText($codexConfigPath, $codexConfig, $utf8NoBom)",
+        "} catch {}",
+        "",
+        "# 3. Claude Code CLI (best-effort)",
         "try {",
         "    $entry = [PSCustomObject]@{ command = $binaryPath; args = @() }",
         "    $entryJson = $entry | ConvertTo-Json -Compress",
         f"    & claude mcp remove -s user {MCP_SERVER_NAME} 2>&1 | Out-Null",
         f"    & claude mcp add-json -s user {MCP_SERVER_NAME} $entryJson 2>&1 | Out-Null",
         "} catch {}",
+        "",
+        "# 4. Codex CLI (best-effort)",
+        "try {",
+        f"    & codex mcp remove {MCP_SERVER_NAME} 2>&1 | Out-Null",
+        f"    & codex mcp add {MCP_SERVER_NAME} -- $binaryPath 2>&1 | Out-Null",
+        "} catch {}",
+        "",
+        "# 5. Warm PyApp cache so MCP clients do not trigger first-run extraction concurrently",
+        "try { & $binaryPath --help 2>&1 | Out-Null } catch {}",
     ]
     return "\n".join(lines) + "\n"
 
@@ -325,8 +354,23 @@ def generateUninstallScript() -> str:
         "    } catch {}",
         "}",
         "",
-        "# 2. Claude Code CLI (best-effort)",
+        "# 2. Codex config",
+        "$codexConfigPath = Join-Path $env:USERPROFILE '.codex\\config.toml'",
+        "if (Test-Path $codexConfigPath) {",
+        "    try {",
+        "        $codexConfig = Get-Content $codexConfigPath -Raw",
+        f"        $pattern = '(?ms)^\\[mcp_servers\\.{MCP_SERVER_NAME}(?:\\.[^\\]]+)?\\]\\r?\\n.*?(?=^\\[|\\z)'",
+        "        $codexConfig = [regex]::Replace($codexConfig, $pattern, '').TrimEnd() + \"`n\"",
+        "        $utf8NoBom = New-Object System.Text.UTF8Encoding $false",
+        "        [System.IO.File]::WriteAllText($codexConfigPath, $codexConfig, $utf8NoBom)",
+        "    } catch {}",
+        "}",
+        "",
+        "# 3. Claude Code CLI (best-effort)",
         f"try {{ & claude mcp remove -s user {MCP_SERVER_NAME} 2>&1 | Out-Null }} catch {{}}",
+        "",
+        "# 4. Codex CLI (best-effort)",
+        f"try {{ & codex mcp remove {MCP_SERVER_NAME} 2>&1 | Out-Null }} catch {{}}",
     ]
     return "\n".join(lines) + "\n"
 

@@ -22,6 +22,7 @@ import importlib.metadata
 import json
 import os
 import pathlib
+import re
 import shutil
 import subprocess
 import sys
@@ -59,6 +60,10 @@ def getDefaultClaudeDesktopConfigPath() -> pathlib.Path:
     return homePath / ".config" / "Claude" / "claude_desktop_config.json"
 
 
+def getDefaultCodexConfigPath() -> pathlib.Path:
+    return pathlib.Path.home() / ".codex" / "config.toml"
+
+
 def readJsonFile(path: pathlib.Path) -> Dict[str, Any]:
     if not path.exists():
         return {}
@@ -79,6 +84,13 @@ def writeJsonAtomic(path: pathlib.Path, data: Dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tempPath = path.with_suffix(path.suffix + ".tmp")
     tempPath.write_text(json.dumps(data, ensure_ascii=True, indent=2) + "\n", encoding="utf-8")
+    tempPath.replace(path)
+
+
+def writeTextAtomic(path: pathlib.Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tempPath = path.with_suffix(path.suffix + ".tmp")
+    tempPath.write_text(text, encoding="utf-8")
     tempPath.replace(path)
 
 
@@ -239,6 +251,67 @@ def buildUvxArgs(uvxFrom: Optional[str], entrypoint: str) -> Dict[str, Any]:
     return {"command": args[0], "args": args[1:]}
 
 
+def tomlString(value: str) -> str:
+    return json.dumps(value, ensure_ascii=True)
+
+
+def tomlArray(values: list[str]) -> str:
+    return "[" + ", ".join(tomlString(value) for value in values) + "]"
+
+
+def tomlKey(key: str) -> str:
+    if re.fullmatch(r"[A-Za-z0-9_-]+", key):
+        return key
+    return tomlString(key)
+
+
+def buildCodexServerToml(serverName: str, entry: Dict[str, Any]) -> str:
+    key = tomlKey(serverName)
+    lines = [
+        f"[mcp_servers.{key}]",
+        f"command = {tomlString(str(entry['command']))}",
+    ]
+
+    args = entry.get("args")
+    if args:
+        lines.append(f"args = {tomlArray([str(arg) for arg in args])}")
+
+    env = entry.get("env")
+    if env:
+        lines.append("")
+        lines.append(f"[mcp_servers.{key}.env]")
+        for envKey in sorted(env.keys()):
+            lines.append(f"{tomlKey(envKey)} = {tomlString(str(env[envKey]))}")
+
+    return "\n".join(lines) + "\n"
+
+
+def removeCodexServerToml(existingText: str, serverName: str) -> Tuple[str, bool]:
+    key = tomlKey(serverName)
+    sectionPrefixes = [f"mcp_servers.{key}", f"mcp_servers.{tomlString(serverName)}"]
+    lines = existingText.splitlines(keepends=True)
+    keptLines = []
+    skipping = False
+    removed = False
+
+    for line in lines:
+        match = re.match(r"\s*\[([^\]]+)\]\s*(?:#.*)?$", line)
+        if match:
+            sectionName = match.group(1).strip()
+            skipping = any(
+                sectionName == prefix or sectionName.startswith(prefix + ".")
+                for prefix in sectionPrefixes
+            )
+            if skipping:
+                removed = True
+                continue
+        if skipping:
+            continue
+        keptLines.append(line)
+
+    return "".join(keptLines).rstrip() + ("\n" if keptLines else ""), removed
+
+
 def runCommand(command: list[str], allowFailure: bool = False) -> None:
     result = subprocess.run(command, check=False, capture_output=True, text=True)
     if result.returncode == 0:
@@ -250,6 +323,22 @@ def runCommand(command: list[str], allowFailure: bool = False) -> None:
     detailParts = [part for part in [stderrText, stdoutText] if part]
     detail = detailParts[0] if detailParts else "Unknown error"
     raise RuntimeError(f"Command failed: {' '.join(command)}: {detail}")
+
+
+def warmPyappBinary(binaryPath: Optional[str]) -> None:
+    if not binaryPath:
+        return
+    try:
+        subprocess.run(
+            [binaryPath, "--help"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+    except Exception:
+        # Best effort only. Registration should still succeed even if warming fails.
+        return
 
 
 def installClaudeCliServer(
@@ -275,18 +364,17 @@ def installClaudeCliServer(
 
 def installCodexCliServer(
     serverName: str,
-    uvxFrom: Optional[str],
-    entrypoint: str,
-    env: Dict[str, str],
+    entry: Dict[str, Any],
     overwrite: bool,
     cliPath: str,
 ) -> None:
     envArgs = []
+    env = entry.get("env", {})
     for key in sorted(env.keys()):
         envArgs += ["--env", f"{key}={env[key]}"]
 
-    uvxArgs = buildUvxArgs(uvxFrom, entrypoint)
-    command = [cliPath, "mcp", "add"] + envArgs + [serverName, "--", uvxArgs["command"]] + uvxArgs["args"]
+    serverCommand = [str(entry["command"])] + [str(arg) for arg in entry.get("args", [])]
+    command = [cliPath, "mcp", "add"] + envArgs + [serverName, "--"] + serverCommand
     if overwrite:
         runCommand([cliPath, "mcp", "remove", serverName], allowFailure=True)
     runCommand(command)
@@ -331,11 +419,41 @@ class DesktopConfigInstaller:
         return config
 
 
+class CodexConfigInstaller:
+    def __init__(self, configPath: pathlib.Path):
+        self.configPath = configPath
+
+    def readConfig(self) -> str:
+        if not self.configPath.exists():
+            return ""
+        return self.configPath.read_text(encoding="utf-8")
+
+    def backupConfig(self) -> Optional[pathlib.Path]:
+        return backupFile(self.configPath)
+
+    def writeConfig(self, text: str) -> None:
+        writeTextAtomic(self.configPath, text)
+
+    def addServer(self, configText: str, serverName: str, entry: Dict[str, Any], overwrite: bool) -> str:
+        configWithoutServer, removed = removeCodexServerToml(configText, serverName)
+        if removed and not overwrite:
+            raise RuntimeError(
+                f"mcp_servers['{serverName}'] already exists in {self.configPath}. "
+                "Re-run with --overwrite to replace it."
+            )
+
+        serverText = buildCodexServerToml(serverName, entry)
+        if configWithoutServer.strip():
+            return configWithoutServer.rstrip() + "\n\n" + serverText
+        return serverText
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Install ffl-mcp into Claude Desktop config (no manual JSON)."
+        description="Install ffl-mcp into supported MCP clients."
     )
     parser.add_argument("--config", dest="configPath", help="Path to claude_desktop_config.json (optional).")
+    parser.add_argument("--codex-config", dest="codexConfigPath", help="Path to Codex config.toml (optional).")
     parser.add_argument("--server-name", default="ffl", dest="serverName")
     parser.add_argument("--entrypoint", default="ffl-mcp", dest="entrypoint")
     parser.add_argument("--from", dest="uvxFrom", help="Force uvx --from spec (e.g. git+https://...).")
@@ -349,7 +467,7 @@ def main() -> None:
         "--target",
         dest="installTargets",
         default="all",
-        help="Comma-separated: all, claude-desktop, claude-cli, codex-cli",
+        help="Comma-separated: all, claude-desktop, claude-cli, codex-desktop, codex-cli",
     )
     parser.add_argument("-y", "--yes", action="store_true", dest="assumeYes")
     args = parser.parse_args()
@@ -358,6 +476,11 @@ def main() -> None:
         configPath = pathlib.Path(args.configPath).expanduser().resolve(strict=False)
     else:
         configPath = getDefaultClaudeDesktopConfigPath()
+
+    if args.codexConfigPath:
+        codexConfigPath = pathlib.Path(args.codexConfigPath).expanduser().resolve(strict=False)
+    else:
+        codexConfigPath = getDefaultCodexConfigPath()
 
     uvxFrom = args.uvxFrom or inferUvxFromSpec()
 
@@ -395,14 +518,15 @@ def main() -> None:
     installTargetsRaw = [part.strip() for part in args.installTargets.split(",")]
     installTargets = [part for part in installTargetsRaw if part]
     if "all" in installTargets:
-        installTargets = ["claude-desktop", "claude-cli", "codex-cli"]
+        installTargets = ["claude-desktop", "claude-cli", "codex-desktop", "codex-cli"]
 
-    allowedTargets = {"claude-desktop", "claude-cli", "codex-cli"}
+    allowedTargets = {"claude-desktop", "claude-cli", "codex-desktop", "codex-cli"}
     invalidTargets = [part for part in installTargets if part not in allowedTargets]
     if invalidTargets:
         raise ValueError(f"Invalid --install-targets: {', '.join(invalidTargets)}")
 
-    backupPath = None
+    claudeBackupPath = None
+    codexBackupPath = None
     if "claude-cli" in installTargets:
         claudeCliPath = getClaudeCliPath()
         if claudeCliPath:
@@ -419,19 +543,26 @@ def main() -> None:
         if codexCliPath:
             installCodexCliServer(
                 serverName=args.serverName,
-                uvxFrom=uvxFrom,
-                entrypoint=args.entrypoint,
-                env=env,
+                entry=entry,
                 overwrite=args.overwrite,
                 cliPath=codexCliPath,
             )
+
+    if "codex-desktop" in installTargets:
+        installer = CodexConfigInstaller(codexConfigPath)
+        configText = installer.readConfig()
+        updatedConfigText = installer.addServer(configText, args.serverName, entry, args.overwrite)
+        codexBackupPath = installer.backupConfig()
+        installer.writeConfig(updatedConfigText)
 
     if "claude-desktop" in installTargets:
         installer = DesktopConfigInstaller(configPath)
         config = installer.readConfig()
         updatedConfig = installer.addServer(config, args.serverName, entry, args.overwrite)
-        backupPath = installer.backupConfig()
+        claudeBackupPath = installer.backupConfig()
         installer.writeConfig(updatedConfig)
+
+    warmPyappBinary(binaryPath)
 
     installedTargets = []
     if "claude-cli" in installTargets and getClaudeCliPath():
@@ -440,15 +571,21 @@ def main() -> None:
     if "codex-cli" in installTargets and getCodexCliPath():
         print("Installed ffl-mcp into Codex CLI.")
         installedTargets.append("codex-cli")
+    if "codex-desktop" in installTargets:
+        print("Installed ffl-mcp into Codex config.")
+        print(f"Config: {codexConfigPath}")
+        if codexBackupPath:
+            print(f"Backup: {codexBackupPath}")
+        installedTargets.append("codex-desktop")
     if "claude-desktop" in installTargets:
         print("Installed ffl-mcp into Claude Desktop config.")
         print(f"Config: {configPath}")
-        if backupPath:
-            print(f"Backup: {backupPath}")
+        if claudeBackupPath:
+            print(f"Backup: {claudeBackupPath}")
         installedTargets.append("claude-desktop")
 
-    if "claude-desktop" in installedTargets:
-        print("\nNext: restart Claude Desktop (or reload MCP servers if your client supports it).")
+    if "claude-desktop" in installedTargets or "codex-desktop" in installedTargets:
+        print("\nNext: restart Claude Desktop/Codex Desktop (or reload MCP servers if your client supports it).")
     elif "claude-cli" in installedTargets:
         print("\nNext: restart Claude Code CLI (or reload MCP servers).")
     elif "codex-cli" in installedTargets:

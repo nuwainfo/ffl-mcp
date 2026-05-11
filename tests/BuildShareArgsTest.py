@@ -111,6 +111,11 @@ class BuildShareArgsTest(unittest.TestCase):
         self.assertIn("--upload", args)
         self.assertIn("--resume", args)
 
+    def testUploadWithPauseFlag(self):
+        args = self._build(upload="24 hours", pause=50)
+        self.assertIn("--pause", args)
+        self.assertEqual(args[args.index("--pause") + 1], "50")
+
     def testResumeWithoutUpload(self):
         args = self._build(resumeUpload=True)
         self.assertIn("--resume", args)
@@ -204,6 +209,19 @@ class BuildShareArgsTest(unittest.TestCase):
         args = self._build(preferredTunnel="cloudflare")
         self.assertIn("--preferred-tunnel", args)
         self.assertEqual(args[args.index("--preferred-tunnel") + 1], "cloudflare")
+
+    def testPortFlag(self):
+        args = self._build(port=8080)
+        self.assertIn("--port", args)
+        self.assertEqual(args[args.index("--port") + 1], "8080")
+
+    def testInviteFlag(self):
+        args = self._build(invite=True)
+        self.assertIn("--invite", args)
+
+    def testEnableReportingFlag(self):
+        args = self._build(enableReporting=True)
+        self.assertIn("--enable-reporting", args)
 
     # --- access control ---
 

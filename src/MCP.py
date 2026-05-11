@@ -25,7 +25,6 @@ import pathlib
 import platform
 import re
 import shlex
-import struct
 import subprocess
 import sys
 import tempfile
@@ -38,7 +37,6 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 from urllib.parse import parse_qs, quote, urlparse
 
 from fastmcp import FastMCP
-
 
 logger = logging.getLogger("fflMcp")
 logger.setLevel(logging.DEBUG)
@@ -148,6 +146,7 @@ def extractQrCodeFromOutput(output: str) -> Optional[str]:
 
     return "\n".join(qrLines)
 
+
 def resolveDefaultFflBin() -> str:
     localFfl = pathlib.Path(__file__).resolve().parent / "ffl.com"
     if localFfl.exists():
@@ -187,6 +186,7 @@ fflHookUsername = os.environ.get("FFL_HOOK_USERNAME", "ffl-mcp")
 fflHookPassword = os.environ.get("FFL_HOOK_PASSWORD")
 fflHookMaxEvents = int(os.environ.get("FFL_HOOK_MAX_EVENTS", "200"))
 
+
 def parseFflDebug() -> Tuple[bool, Optional[str]]:
     """
     Parse FFL_DEBUG environment variable.
@@ -202,6 +202,7 @@ def parseFflDebug() -> Tuple[bool, Optional[str]]:
         return True, None
     return True, value
 
+
 fflDebugEnabled, fflDebugPath = parseFflDebug()
 
 
@@ -210,7 +211,7 @@ def parseBasicAuthHeader(headerValue: Optional[str]) -> Optional[Dict[str, str]]
         return None
     if not headerValue.startswith("Basic "):
         return None
-    encoded = headerValue[len("Basic ") :].strip()
+    encoded = headerValue[len("Basic "):].strip()
     try:
         decoded = base64.b64decode(encoded).decode("utf-8")
     except (ValueError, UnicodeDecodeError):
@@ -228,6 +229,7 @@ except ImportError:
 
 
 class HookRequestHandler(BaseHTTPRequestHandler):
+
     def log_message(self, format, *args):
         logger.debug("Hook request: %s", format % args)
 
@@ -335,6 +337,7 @@ class HookRequestHandler(BaseHTTPRequestHandler):
 
 
 class HookServer(ThreadingHTTPServer):
+
     def __init__(
         self,
         host: str,
@@ -394,7 +397,7 @@ class HookServer(ThreadingHTTPServer):
         with self._eventLock:
             self._events.append(entry)
             if len(self._events) > self.maxEvents:
-                self._events = self._events[-self.maxEvents :]
+                self._events = self._events[-self.maxEvents:]
 
         if eventName == "/share/link/create" and isinstance(eventData, dict):
             self._storeManifest(eventData)
@@ -411,8 +414,16 @@ class HookServer(ThreadingHTTPServer):
                         self._registeredFileName = rawFileName
             return {
                 "routes": [
-                    {"method": "GET", "path": "/manifest", "encryptResponse": True},
-                    {"method": "GET", "path": "/thumb", "encryptResponse": True},
+                    {
+                        "method": "GET",
+                        "path": "/manifest",
+                        "encryptResponse": True
+                    },
+                    {
+                        "method": "GET",
+                        "path": "/thumb",
+                        "encryptResponse": True
+                    },
                 ]
             }
 
@@ -440,7 +451,7 @@ class HookServer(ThreadingHTTPServer):
                 arcnameToPath[os.path.basename(nativePath)] = nativePath
         elif isinstance(rawFilePath, str):
             nativePath = self._toNativePath(rawFilePath)
-            rawFilePath = nativePath  # normalize for later use
+            rawFilePath = nativePath # normalize for later use
 
         entries: List[Dict[str, Any]] = []
         hashMap: Dict[str, Dict[str, Any]] = {}
@@ -512,7 +523,7 @@ class HookServer(ThreadingHTTPServer):
                 "mime": singleMime,
                 "dataOffset": 0,
             }]
-            zipName = singleName  # show the real filename, not a .zip name
+            zipName = singleName # show the real filename, not a .zip name
 
         # Fallback: estimate zipSize from entries when registration event didn't
         # provide fileSize (older ffl binary). The last entry's dataOffset + size
@@ -576,6 +587,7 @@ class HookServer(ThreadingHTTPServer):
 
 
 class SessionStore:
+
     def __init__(self):
         self.lock = threading.Lock()
         self.sessions: Dict[str, Dict[str, Any]] = {}
@@ -588,17 +600,14 @@ class SessionStore:
         self.pruneSessions()
         now = time.time()
         with self.lock:
-            return [
-                {
-                    "sessionId": sessionId,
-                    "pid": info["process"].pid,
-                    "link": info["link"],
-                    "ageSeconds": int(now - info["startedAt"]),
-                    "cmd": info["command"],
-                    "eventCount": info["hookServer"].getEventCount() if info.get("hookServer") else 0,
-                }
-                for sessionId, info in self.sessions.items()
-            ]
+            return [{
+                "sessionId": sessionId,
+                "pid": info["process"].pid,
+                "link": info["link"],
+                "ageSeconds": int(now - info["startedAt"]),
+                "cmd": info["command"],
+                "eventCount": info["hookServer"].getEventCount() if info.get("hookServer") else 0,
+            } for sessionId, info in self.sessions.items()]
 
     def getSession(self, sessionId: str) -> Optional[Dict[str, Any]]:
         self.pruneSessions()
@@ -646,9 +655,7 @@ class SessionStore:
     def pruneSessions(self) -> None:
         with self.lock:
             endedSessionIds = [
-                sessionId
-                for sessionId, info in self.sessions.items()
-                if info["process"].poll() is not None
+                sessionId for sessionId, info in self.sessions.items() if info["process"].poll() is not None
             ]
         for sessionId in endedSessionIds:
             self.cleanupSession(sessionId)
@@ -726,7 +733,11 @@ def createTempFile(fileName: str, data: bytes) -> str:
     return tempFile.name
 
 
-def setupDebugLogging(tempPaths: Optional[List[str]] = None, prefix: str = "ffl_debug_", customPath: Optional[str] = None) -> Tuple[Any, str]:
+def setupDebugLogging(
+    tempPaths: Optional[List[str]] = None,
+    prefix: str = "ffl_debug_",
+    customPath: Optional[str] = None
+) -> Tuple[Any, str]:
     """
     Create a file for debug logging and open it for writing.
     If customPath is provided, uses that path instead of creating a temp file.
@@ -765,12 +776,12 @@ def shouldUseShell(command: List[str]) -> bool:
         return True
     if not command:
         return False
-        
+
     # On Windows, APE binaries (.com files) work fine without shell mode
     # and using shell mode causes quoting issues with paths
     if platform.system() == "Windows":
         return False
-        
+
     return command[0].endswith(".com")
 
 
@@ -797,6 +808,10 @@ def buildShareArgs(
     resumeUpload: bool = False,
     vfs: bool = False,
     preferredTunnel: Optional[str] = None,
+    port: Optional[int] = None,
+    invite: bool = False,
+    pause: Optional[int] = None,
+    enableReporting: bool = False,
 ) -> List[str]:
     args = list(shareTarget) if isinstance(shareTarget, list) else [shareTarget]
     # --max-downloads and --timeout are P2P-only; skip them when uploading to server
@@ -810,6 +825,8 @@ def buildShareArgs(
         args += ["--upload", upload]
     if resumeUpload:
         args.append("--resume")
+    if pause is not None:
+        args += ["--pause", str(pause)]
     if exclude:
         args += ["--exclude", exclude]
     if authUser:
@@ -842,10 +859,16 @@ def buildShareArgs(
         args.append("--vfs")
     if preferredTunnel:
         args += ["--preferred-tunnel", preferredTunnel]
+    if port is not None:
+        args += ["--port", str(port)]
+    if invite:
+        args.append("--invite")
     if hookUrl:
         args += ["--hook", hookUrl]
     if proxy:
         args += ["--proxy", proxy]
+    if enableReporting:
+        args.append("--enable-reporting")
     if fflDebugEnabled:
         args += ["--log-level", "DEBUG"]
     return args
@@ -894,6 +917,10 @@ def shareWithFfl(
     resumeUpload: bool = False,
     vfs: bool = False,
     preferredTunnel: Optional[str] = None,
+    port: Optional[int] = None,
+    invite: bool = False,
+    pause: Optional[int] = None,
+    enableReporting: bool = False,
 ) -> Dict[str, Any]:
     """
     Common sharing logic for all share functions.
@@ -926,6 +953,10 @@ def shareWithFfl(
         resumeUpload=resumeUpload,
         vfs=vfs,
         preferredTunnel=preferredTunnel,
+        port=port,
+        invite=invite,
+        pause=pause,
+        enableReporting=enableReporting,
     )
 
     return spawnFflAndWaitLink(args, stdinBytes, waitLinkSeconds, tempPaths, hookServer, None, qrInTerminal)
@@ -1016,18 +1047,16 @@ def spawnFflAndWaitLink(
         raise
 
     sessionId = str(uuid.uuid4())
-    sessionStore.addSession(
-        {
-            "sessionId": sessionId,
-            "process": process,
-            "link": link,
-            "startedAt": time.time(),
-            "jsonPath": jsonPath,
-            "command": command,
-            "tempPaths": tempPaths,
-            "hookServer": hookServer,
-        }
-    )
+    sessionStore.addSession({
+        "sessionId": sessionId,
+        "process": process,
+        "link": link,
+        "startedAt": time.time(),
+        "jsonPath": jsonPath,
+        "command": command,
+        "tempPaths": tempPaths,
+        "hookServer": hookServer,
+    })
 
     result = {"sessionId": sessionId, "link": link, "pid": process.pid, "jsonPath": jsonPath, "cmd": command}
 
@@ -1073,6 +1102,9 @@ def fflShareText(
     receipt: Optional[str] = None,
     receiptConfirm: Optional[str] = None,
     forceRelay: bool = False,
+    port: Optional[int] = None,
+    invite: bool = False,
+    enableReporting: bool = False,
 ) -> Dict[str, Any]:
     """
     Share text content using ffl. Returns a sessionId and link.
@@ -1098,22 +1130,39 @@ def fflShareText(
         receipt: Send email notification when recipient downloads (pass email address, or empty string for account email)
         receiptConfirm: Require recipient to confirm before download starts; pass confirmation message or empty string for default
         forceRelay: Disable direct WebRTC; route all traffic through tunnel
+        port: Local HTTP server port (default: auto-detect)
+        invite: Open invite page in browser with the sharing link
+        enableReporting: Enable ffl error reporting for diagnostics (disabled by default)
     """
     textBytes = text.encode("utf-8")
     tempPaths: List[str] = []
 
     kwargs = dict(
-        recipientAuth=recipientAuth, pickupCode=pickupCode, recipientPublicKey=recipientPublicKey,
-        recipientEmail=recipientEmail, alias=alias, receipt=receipt, receiptConfirm=receiptConfirm,
+        recipientAuth=recipientAuth,
+        pickupCode=pickupCode,
+        recipientPublicKey=recipientPublicKey,
+        recipientEmail=recipientEmail,
+        alias=alias,
+        receipt=receipt,
+        receiptConfirm=receiptConfirm,
         forceRelay=forceRelay,
+        port=port,
+        invite=invite,
+        enableReporting=enableReporting,
     )
 
     if fflUseStdin:
-        return shareWithFfl("-", textBytes, tempPaths, name, e2ee, authUser, authPassword, maxDownloads, timeoutSeconds, waitLinkSeconds, hookUrl, proxy, qrInTerminal, **kwargs)
+        return shareWithFfl(
+            "-", textBytes, tempPaths, name, e2ee, authUser, authPassword, maxDownloads, timeoutSeconds,
+            waitLinkSeconds, hookUrl, proxy, qrInTerminal, **kwargs
+        )
 
     tempPath = createTempFile(name, textBytes)
     tempPaths.append(tempPath)
-    return shareWithFfl(tempPath, None, tempPaths, name, e2ee, authUser, authPassword, maxDownloads, timeoutSeconds, waitLinkSeconds, hookUrl, proxy, qrInTerminal, **kwargs)
+    return shareWithFfl(
+        tempPath, None, tempPaths, name, e2ee, authUser, authPassword, maxDownloads, timeoutSeconds, waitLinkSeconds,
+        hookUrl, proxy, qrInTerminal, **kwargs
+    )
 
 
 @mcp.tool
@@ -1137,6 +1186,9 @@ def fflShareBase64(
     receipt: Optional[str] = None,
     receiptConfirm: Optional[str] = None,
     forceRelay: bool = False,
+    port: Optional[int] = None,
+    invite: bool = False,
+    enableReporting: bool = False,
 ) -> Dict[str, Any]:
     """
     Share arbitrary binary data (base64-encoded) using ffl. Returns a sessionId and link.
@@ -1162,22 +1214,39 @@ def fflShareBase64(
         receipt: Send email notification when recipient downloads (pass email address, or empty string for account email)
         receiptConfirm: Require recipient to confirm before download starts; pass confirmation message or empty string for default
         forceRelay: Disable direct WebRTC; route all traffic through tunnel
+        port: Local HTTP server port (default: auto-detect)
+        invite: Open invite page in browser with the sharing link
+        enableReporting: Enable ffl error reporting for diagnostics (disabled by default)
     """
     rawBytes = base64.b64decode(dataB64, validate=True)
     tempPaths: List[str] = []
 
     kwargs = dict(
-        recipientAuth=recipientAuth, pickupCode=pickupCode, recipientPublicKey=recipientPublicKey,
-        recipientEmail=recipientEmail, alias=alias, receipt=receipt, receiptConfirm=receiptConfirm,
+        recipientAuth=recipientAuth,
+        pickupCode=pickupCode,
+        recipientPublicKey=recipientPublicKey,
+        recipientEmail=recipientEmail,
+        alias=alias,
+        receipt=receipt,
+        receiptConfirm=receiptConfirm,
         forceRelay=forceRelay,
+        port=port,
+        invite=invite,
+        enableReporting=enableReporting,
     )
 
     if fflUseStdin:
-        return shareWithFfl("-", rawBytes, tempPaths, name, e2ee, authUser, authPassword, maxDownloads, timeoutSeconds, waitLinkSeconds, hookUrl, proxy, qrInTerminal, **kwargs)
+        return shareWithFfl(
+            "-", rawBytes, tempPaths, name, e2ee, authUser, authPassword, maxDownloads, timeoutSeconds, waitLinkSeconds,
+            hookUrl, proxy, qrInTerminal, **kwargs
+        )
 
     tempPath = createTempFile(name, rawBytes)
     tempPaths.append(tempPath)
-    return shareWithFfl(tempPath, None, tempPaths, name, e2ee, authUser, authPassword, maxDownloads, timeoutSeconds, waitLinkSeconds, hookUrl, proxy, qrInTerminal, **kwargs)
+    return shareWithFfl(
+        tempPath, None, tempPaths, name, e2ee, authUser, authPassword, maxDownloads, timeoutSeconds, waitLinkSeconds,
+        hookUrl, proxy, qrInTerminal, **kwargs
+    )
 
 
 @mcp.tool
@@ -1207,6 +1276,10 @@ def fflShareFile(
     resumeUpload: bool = False,
     vfs: bool = False,
     preferredTunnel: Optional[str] = None,
+    port: Optional[int] = None,
+    invite: bool = False,
+    pause: Optional[int] = None,
+    enableReporting: bool = False,
 ) -> Dict[str, Any]:
     """
     Share a local file or folder using ffl. Respects ALLOWED_BASE_DIR when configured.
@@ -1247,13 +1320,36 @@ def fflShareFile(
 
     tempPaths: List[str] = []
     result = shareWithFfl(
-        str(sharePath), None, tempPaths, name, e2ee, authUser, authPassword,
-        maxDownloads, timeoutSeconds, waitLinkSeconds, hookUrl, proxy, qrInTerminal,
-        exclude=exclude, recipientAuth=recipientAuth, pickupCode=pickupCode,
-        recipientPublicKey=recipientPublicKey, recipientEmail=recipientEmail,
-        alias=alias, receipt=receipt, receiptConfirm=receiptConfirm,
-        forceRelay=forceRelay, upload=upload, resumeUpload=resumeUpload,
-        vfs=vfs, preferredTunnel=preferredTunnel,
+        str(sharePath),
+        None,
+        tempPaths,
+        name,
+        e2ee,
+        authUser,
+        authPassword,
+        maxDownloads,
+        timeoutSeconds,
+        waitLinkSeconds,
+        hookUrl,
+        proxy,
+        qrInTerminal,
+        exclude=exclude,
+        recipientAuth=recipientAuth,
+        pickupCode=pickupCode,
+        recipientPublicKey=recipientPublicKey,
+        recipientEmail=recipientEmail,
+        alias=alias,
+        receipt=receipt,
+        receiptConfirm=receiptConfirm,
+        forceRelay=forceRelay,
+        upload=upload,
+        resumeUpload=resumeUpload,
+        vfs=vfs,
+        preferredTunnel=preferredTunnel,
+        port=port,
+        invite=invite,
+        pause=pause,
+        enableReporting=enableReporting,
     )
     if preview and isinstance(result.get("link"), str):
         result["link"] = result["link"] + "?preview=true"
@@ -1286,6 +1382,10 @@ def fflShareFiles(
     upload: Optional[str] = None,
     resumeUpload: bool = False,
     preferredTunnel: Optional[str] = None,
+    port: Optional[int] = None,
+    invite: bool = False,
+    pause: Optional[int] = None,
+    enableReporting: bool = False,
 ) -> Dict[str, Any]:
     """
     Share multiple local files at once using ffl. ffl auto-zips them into a single download.
@@ -1328,13 +1428,35 @@ def fflShareFiles(
 
     shareTargets = [str(p) for p in sharePaths]
     result = shareWithFfl(
-        shareTargets, None, [], name, e2ee, authUser, authPassword,
-        maxDownloads, timeoutSeconds, waitLinkSeconds, hookUrl, proxy, qrInTerminal,
-        exclude=exclude, recipientAuth=recipientAuth, pickupCode=pickupCode,
-        recipientPublicKey=recipientPublicKey, recipientEmail=recipientEmail,
-        alias=alias, receipt=receipt, receiptConfirm=receiptConfirm,
-        forceRelay=forceRelay, upload=upload, resumeUpload=resumeUpload,
+        shareTargets,
+        None,
+        [],
+        name,
+        e2ee,
+        authUser,
+        authPassword,
+        maxDownloads,
+        timeoutSeconds,
+        waitLinkSeconds,
+        hookUrl,
+        proxy,
+        qrInTerminal,
+        exclude=exclude,
+        recipientAuth=recipientAuth,
+        pickupCode=pickupCode,
+        recipientPublicKey=recipientPublicKey,
+        recipientEmail=recipientEmail,
+        alias=alias,
+        receipt=receipt,
+        receiptConfirm=receiptConfirm,
+        forceRelay=forceRelay,
+        upload=upload,
+        resumeUpload=resumeUpload,
         preferredTunnel=preferredTunnel,
+        port=port,
+        invite=invite,
+        pause=pause,
+        enableReporting=enableReporting,
     )
     if preview and isinstance(result.get("link"), str):
         result["link"] = result["link"] + "?preview=true"
@@ -1352,6 +1474,7 @@ def fflDownload(
     recipientAuth: Optional[str] = None,
     pickupCode: Optional[str] = None,
     recipientPrivateKey: Optional[str] = None,
+    enableReporting: bool = False,
 ) -> Dict[str, Any]:
     """
     Download a file from a FastFileLink URL or regular HTTP(S) URL using ffl.
@@ -1398,6 +1521,9 @@ def fflDownload(
 
     if proxy:
         command += ["--proxy", proxy]
+
+    if enableReporting:
+        command.append("--enable-reporting")
 
     if fflDebugEnabled:
         command += ["--log-level", "DEBUG"]
@@ -1583,7 +1709,9 @@ def fflKeygen(
     try:
         fflEnv = buildFflEnv()
         commandArg = shlex.join(command) if useShell else command
-        result = subprocess.run(commandArg, shell=useShell, stdout=logFile, stderr=logFile, text=True, timeout=60, env=fflEnv)
+        result = subprocess.run(
+            commandArg, shell=useShell, stdout=logFile, stderr=logFile, text=True, timeout=60, env=fflEnv
+        )
     finally:
         try:
             logFile.close()
@@ -1653,7 +1781,6 @@ def fflGetSessionEvents(sessionId: str, limit: int = 50) -> Dict[str, Any]:
     return {"ok": True, "sessionId": sessionId, "events": hookServer.getEvents(limit)}
 
 
-
 def main() -> None:
     os.environ.setdefault("FASTMCP_SHOW_CLI_BANNER", "false")
     parser = argparse.ArgumentParser()
@@ -1665,7 +1792,7 @@ def main() -> None:
         "--debug",
         action="store_true",
         help="Enable ffl debug logging: passes --log-level DEBUG to ffl and saves output to a log file. "
-             "Equivalent to setting FFL_DEBUG=1.",
+        "Equivalent to setting FFL_DEBUG=1.",
     )
     args = parser.parse_args()
 
