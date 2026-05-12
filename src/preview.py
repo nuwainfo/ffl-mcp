@@ -1,6 +1,18 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 # -*- coding: utf-8 -*-
 # SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 """
 Platform-native thumbnail generation for ffl-mcp.
 
@@ -30,6 +42,7 @@ from typing import Optional, Tuple
 logger = logging.getLogger("fflMcp.preview")
 
 THUMB_MAX = 256  # default max width/height in pixels
+DEFAULT_THUMB_SIZE = 256
 
 
 # ---------------------------------------------------------------------------
@@ -52,6 +65,27 @@ def _encodePng(width: int, height: int, rgbRows: bytes) -> bytes:
         + _pngChunk(b"IDAT", zlib.compress(raw, 6))
         + _pngChunk(b"IEND", b"")
     )
+
+
+def generateDefaultThumbnail(maxSize: int = THUMB_MAX) -> Tuple[bytes, str]:
+    """Return a small generic PNG thumbnail when platform thumbnailing fails."""
+    size = max(32, min(int(maxSize or DEFAULT_THUMB_SIZE), DEFAULT_THUMB_SIZE))
+    rgb = bytearray(size * size * 3)
+    for y in range(size):
+        for x in range(size):
+            pos = (y * size + x) * 3
+            inFold = y > size * 0.58
+            stripe = ((x + y) // 18) % 2 == 0
+            if inFold:
+                r, g, b = (245, 247, 250) if stripe else (235, 240, 247)
+            else:
+                r = 226 - int(32 * y / size)
+                g = 238 - int(22 * x / size)
+                b = 248
+            rgb[pos] = max(0, min(255, r))
+            rgb[pos + 1] = max(0, min(255, g))
+            rgb[pos + 2] = max(0, min(255, b))
+    return _encodePng(size, size, bytes(rgb)), "image/png"
 
 
 # ---------------------------------------------------------------------------

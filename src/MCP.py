@@ -223,9 +223,9 @@ def parseBasicAuthHeader(headerValue: Optional[str]) -> Optional[Dict[str, str]]
 
 
 try:
-    from src.preview import generateThumbnail
+    from src.preview import generateDefaultThumbnail, generateThumbnail
 except ImportError:
-    from preview import generateThumbnail
+    from preview import generateDefaultThumbnail, generateThumbnail
 
 
 class HookRequestHandler(BaseHTTPRequestHandler):
@@ -308,6 +308,39 @@ class HookRequestHandler(BaseHTTPRequestHandler):
             self.wfile.write(body)
             return
 
+        if parsed.path == "/file":
+            hashValue = args.get("hash", [None])[0]
+            if not hashValue:
+                self.send_response(400)
+                self.end_headers()
+                return
+            filePath = hookServer.resolveFileByHash(hashValue)
+            if not filePath:
+                self.send_response(404)
+                self.end_headers()
+                return
+            mimeType, _ = mimetypes.guess_type(filePath)
+            if not mimeType:
+                mimeType = "application/octet-stream"
+            try:
+                fileSize = os.path.getsize(filePath)
+                fileHandle = open(filePath, "rb")
+            except OSError:
+                self.send_response(404)
+                self.end_headers()
+                return
+            with fileHandle:
+                self.send_response(200)
+                self.send_header("Content-Type", mimeType)
+                self.send_header("Content-Length", str(fileSize))
+                self.end_headers()
+                while True:
+                    chunk = fileHandle.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+            return
+
         if parsed.path == "/thumb":
             hashValue = args.get("hash", [None])[0]
             if not hashValue:
@@ -321,9 +354,7 @@ class HookRequestHandler(BaseHTTPRequestHandler):
                 return
             thumbResult = generateThumbnail(filePath)
             if not thumbResult:
-                self.send_response(404)
-                self.end_headers()
-                return
+                thumbResult = generateDefaultThumbnail()
             thumbBytes, mimeType = thumbResult
             self.send_response(200)
             self.send_header("Content-Type", mimeType)
@@ -417,6 +448,11 @@ class HookServer(ThreadingHTTPServer):
                     {
                         "method": "GET",
                         "path": "/manifest",
+                        "encryptResponse": True
+                    },
+                    {
+                        "method": "GET",
+                        "path": "/file",
                         "encryptResponse": True
                     },
                     {
@@ -547,7 +583,18 @@ class HookServer(ThreadingHTTPServer):
             entry = self._hashToEntry.get(hashValue)
             sharedRoot = self._sharedRoot
             arcnameToPath = dict(self._arcnameToPath)
+            registeredFileName = self._registeredFileName
         if not entry:
+            if not registeredFileName:
+                return None
+            registeredHash = hashlib.blake2b(
+                os.path.basename(registeredFileName).encode("utf-8"),
+                digest_size=32
+            ).hexdigest()
+            if hashValue != registeredHash:
+                return None
+            if isinstance(sharedRoot, str) and os.path.isfile(sharedRoot):
+                return sharedRoot
             return None
         arcname = entry["name"]
 
@@ -874,9 +921,11 @@ def buildShareArgs(
     return args
 
 
-def startHookServerIfNeeded(hookUrl: Optional[str]) -> Dict[str, Any]:
+def startHookServerIfNeeded(hookUrl: Optional[str], enablePreviewSidecar: bool = False) -> Dict[str, Any]:
     if hookUrl or not fflUseHook:
         return {"hookServer": None, "hookUrl": hookUrl}
+    if not enablePreviewSidecar:
+        return {"hookServer": None, "hookUrl": None}
 
     hookServer = HookServer(
         host=fflHookHost,
@@ -921,12 +970,13 @@ def shareWithFfl(
     invite: bool = False,
     pause: Optional[int] = None,
     enableReporting: bool = False,
+    enablePreviewSidecar: bool = False,
 ) -> Dict[str, Any]:
     """
     Common sharing logic for all share functions.
     Handles hook server initialization, argument building, and process spawning.
     """
-    hookInfo = startHookServerIfNeeded(hookUrl)
+    hookInfo = startHookServerIfNeeded(hookUrl, enablePreviewSidecar=enablePreviewSidecar)
     hookServer = hookInfo["hookServer"]
     effectiveHookUrl = hookInfo["hookUrl"]
 
@@ -1319,6 +1369,7 @@ def fflShareFile(
         raise PermissionError(f"Path not allowed by ALLOWED_BASE_DIR: {path}")
 
     tempPaths: List[str] = []
+    enablePreviewSidecar = sharePath.is_dir()
     result = shareWithFfl(
         str(sharePath),
         None,
@@ -1350,9 +1401,8 @@ def fflShareFile(
         invite=invite,
         pause=pause,
         enableReporting=enableReporting,
+        enablePreviewSidecar=enablePreviewSidecar,
     )
-    if preview and isinstance(result.get("link"), str):
-        result["link"] = result["link"] + "?preview=true"
     return result
 
 
@@ -1457,9 +1507,8 @@ def fflShareFiles(
         invite=invite,
         pause=pause,
         enableReporting=enableReporting,
+        enablePreviewSidecar=True,
     )
-    if preview and isinstance(result.get("link"), str):
-        result["link"] = result["link"] + "?preview=true"
     return result
 
 

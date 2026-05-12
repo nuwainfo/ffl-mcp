@@ -171,6 +171,7 @@ def prepareDistribution(wheelPath: Path, rebuildDist: bool):
     run([
         str(pythonExe), "-m", "pip", "install",
         str(wheelPath.resolve()),
+        "--force-reinstall",
         "--no-warn-script-location",
         "--quiet",
     ])

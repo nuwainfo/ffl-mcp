@@ -42,6 +42,7 @@ import urllib.request
 import zlib
 from pathlib import Path
 from urllib.parse import urlparse, urlencode
+from unittest.mock import patch
 
 # Ensure src/ and tests/ are importable
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -154,6 +155,12 @@ class PngEncoderTest(unittest.TestCase):
         self.assertEqual(raw[1], 255)    # R
         self.assertEqual(raw[2], 0)      # G
         self.assertEqual(raw[3], 0)      # B
+
+    def testDefaultThumbnailIsPng(self):
+        data, mimeType = previewMod.generateDefaultThumbnail()
+        self.assertEqual(mimeType, "image/png")
+        self.assertTrue(_isPng(data))
+        self.assertEqual(_parsePngDimensions(data), (256, 256))
 
 
 # ---------------------------------------------------------------------------
@@ -668,14 +675,16 @@ class HookServerPreviewTest(unittest.TestCase):
         return manifestItems
 
     def testEndpointRegisterReturnsRoutes(self):
-        """POST /hook/server/endpoints/register must return routes for /manifest and /thumb."""
+        """POST /hook/server/endpoints/register must return preview routes."""
         resp = _hookPost(self.hookServer, "/hook/server/endpoints/register", {"uid": "abc123"})
         self.assertIn("routes", resp)
         routes = {r["path"]: r for r in resp["routes"]}
         self.assertIn("/manifest", routes)
+        self.assertIn("/file", routes)
         self.assertIn("/thumb", routes)
         # encryptResponse must be True so ffl encrypts for E2EE-enabled sessions
         self.assertTrue(routes["/manifest"].get("encryptResponse"), "/manifest must have encryptResponse=True")
+        self.assertTrue(routes["/file"].get("encryptResponse"), "/file must have encryptResponse=True")
         self.assertTrue(routes["/thumb"].get("encryptResponse"), "/thumb must have encryptResponse=True")
 
     def testManifestEmptyBeforeShareLinkCreate(self):
@@ -776,6 +785,39 @@ class HookServerPreviewTest(unittest.TestCase):
 
         self.assertIn("image/png", contentType)
         self.assertTrue(_isPng(thumbBytes), "Response is not a valid PNG")
+
+    def testThumbFallsBackToDefaultPngWhenGenerationFails(self):
+        """/thumb?hash=<valid> must return a default PNG when thumbnail generation fails."""
+        manifestItems = self._postShareLinkCreate(self.tmpDir, ["photo1.png"])
+        arcname = manifestItems[0]["arcname"]
+        hashValue = hashlib.blake2b(arcname.encode("utf-8"), digest_size=32).hexdigest()
+
+        with patch.object(MCP, "generateThumbnail", return_value=None):
+            with _hookGet(self.hookServer, "/thumb", {"hash": hashValue, "w": "420", "h": "320", "fmt": "jpeg"}) as resp:
+                thumbBytes = resp.read()
+                contentType = resp.headers.get("Content-Type", "")
+
+        self.assertIn("image/png", contentType)
+        self.assertTrue(_isPng(thumbBytes))
+
+    @unittest.skipUnless(sys.platform != "linux" or __import__("shutil").which("ffmpeg") or
+                         __import__("shutil").which("convert"),
+                         "No thumbnail tool available on Linux")
+    def testFileEndpointReturnsOriginalFileBytes(self):
+        """/file?hash=<valid> must return the original file bytes, not a thumbnail."""
+        manifestItems = self._postShareLinkCreate(self.tmpDir, ["photo1.png"])
+        arcname = manifestItems[0]["arcname"]
+        hashValue = hashlib.blake2b(arcname.encode("utf-8"), digest_size=32).hexdigest()
+        expectedPath = os.path.join(self.tmpDir, "photo1.png")
+        with open(expectedPath, "rb") as f:
+            expectedBytes = f.read()
+
+        with _hookGet(self.hookServer, "/file", {"hash": hashValue}) as resp:
+            fileBytes = resp.read()
+            contentType = resp.headers.get("Content-Type", "")
+
+        self.assertIn("image/png", contentType)
+        self.assertEqual(fileBytes, expectedBytes)
 
     @unittest.skipUnless(sys.platform != "linux" or __import__("shutil").which("ffmpeg") or
                          __import__("shutil").which("convert"),
@@ -1007,6 +1049,17 @@ class SingleFileManifestTest(unittest.TestCase):
             "filePath": f"/C/Users/test/{fileName}",
         })
 
+    def _sendSingleLocalFileShare(self, path, fileSize=128, link="https://ffl.example.com/abc123"):
+        fileName = os.path.basename(path)
+        _hookPost(self.hookServer, "/hook/server/endpoints/register", {
+            "fileName": fileName,
+            "fileSize": fileSize,
+        })
+        _hookPost(self.hookServer, "/share/link/create", {
+            "link": link,
+            "filePath": path,
+        })
+
     def testSyntheticEntryCreated(self):
         """Single file with no manifest entries must produce one synthetic entry."""
         self._sendSingleFileShare("video.mp4", 28_000_000)
@@ -1066,6 +1119,17 @@ class SingleFileManifestTest(unittest.TestCase):
         expected = hashlib.blake2b("video.mp4".encode("utf-8"), digest_size=32).hexdigest()
         self.assertEqual(data["entries"][0]["hash"], expected)
 
+    def testSyntheticSingleFileHashResolvesToSharedFile(self):
+        """Synthetic single-file manifest hashes must resolve for /file?hash=... previews."""
+        with tempfile.TemporaryDirectory() as tmpDir:
+            filePath = os.path.join(tmpDir, "single.png")
+            with open(filePath, "wb") as f:
+                f.write(_makePng(16, 16))
+            self._sendSingleLocalFileShare(filePath, os.path.getsize(filePath))
+            hashValue = hashlib.blake2b("single.png".encode("utf-8"), digest_size=32).hexdigest()
+            resolvedPath = self.hookServer.resolveFileByHash(hashValue)
+            self.assertEqual(resolvedPath, filePath)
+
     def testNoSyntheticEntryWhenFileSizeZero(self):
         """fileSize=0 in registration must not create a synthetic entry."""
         _hookPost(self.hookServer, "/hook/server/endpoints/register", {
@@ -1080,6 +1144,50 @@ class SingleFileManifestTest(unittest.TestCase):
             data = json.loads(resp.read())
         self.assertEqual(data["count"], 0)
         self.assertEqual(data["zipSize"], 0)
+
+
+# ---------------------------------------------------------------------------
+# Preview sidecar policy
+# ---------------------------------------------------------------------------
+
+class PreviewSidecarPolicyTest(unittest.TestCase):
+    """MCP should only create the internal preview sidecar for folder/multi-file shares."""
+
+    def testSingleFileShareDoesNotEnablePreviewSidecarOrPreviewLink(self):
+        with tempfile.NamedTemporaryFile(delete=False) as tmp:
+            tmp.write(b"hello")
+            filePath = tmp.name
+        try:
+            with patch.object(MCP, "shareWithFfl", return_value={"link": "https://ffl.example.com/abc"}) as mocked:
+                result = MCP.fflShareFile.fn(filePath, preview=True)
+        finally:
+            os.unlink(filePath)
+
+        self.assertEqual(result["link"], "https://ffl.example.com/abc")
+        self.assertFalse(mocked.call_args.kwargs["enablePreviewSidecar"])
+
+    def testFolderShareEnablesPreviewSidecarAndKeepsCleanLink(self):
+        with tempfile.TemporaryDirectory() as tmpDir:
+            with patch.object(MCP, "shareWithFfl", return_value={"link": "https://ffl.example.com/abc"}) as mocked:
+                result = MCP.fflShareFile.fn(tmpDir, preview=True)
+
+        self.assertEqual(result["link"], "https://ffl.example.com/abc")
+        self.assertTrue(mocked.call_args.kwargs["enablePreviewSidecar"])
+
+    def testMultiFileShareEnablesPreviewSidecarAndKeepsCleanLink(self):
+        with tempfile.TemporaryDirectory() as tmpDir:
+            paths = []
+            for name in ("a.txt", "b.txt"):
+                path = os.path.join(tmpDir, name)
+                with open(path, "wb") as f:
+                    f.write(b"x")
+                paths.append(path)
+
+            with patch.object(MCP, "shareWithFfl", return_value={"link": "https://ffl.example.com/abc"}) as mocked:
+                result = MCP.fflShareFiles.fn(paths, preview=True)
+
+        self.assertEqual(result["link"], "https://ffl.example.com/abc")
+        self.assertTrue(mocked.call_args.kwargs["enablePreviewSidecar"])
 
 
 if __name__ == "__main__":
