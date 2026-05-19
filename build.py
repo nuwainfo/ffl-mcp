@@ -107,7 +107,24 @@ def run(cmd, **kwargs):
 def buildWheel():
     print("\n[1/6] Building wheel...")
     DIST_DIR.mkdir(exist_ok=True)
+    # Must use --wheel to build directly from source tree.
+    # Plain `uv build` goes sdist→wheel, and the sdist intentionally only
+    # includes src/ffl.com (binary), so the wheel would be missing all .py files.
     run(["uv", "build", "--wheel", "--out-dir", str(DIST_DIR)])
+
+
+def validateWheel(wheelPath: Path) -> None:
+    import zipfile
+    with zipfile.ZipFile(wheelPath) as zf:
+        names = zf.namelist()
+    if not any(n.endswith(".py") for n in names):
+        print(
+            f"ERROR: wheel {wheelPath.name} contains no .py files.\n"
+            "This happens when the wheel was built via `uv build` (sdist→wheel path)\n"
+            "instead of `uv build --wheel`. Delete the wheel and re-run without --skip-wheel.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
 
 def findWheel() -> Path:
@@ -117,7 +134,9 @@ def findWheel() -> Path:
     if not wheels:
         print("ERROR: no ffl-mcp wheel found in dist/. Run without --skip-wheel.", file=sys.stderr)
         sys.exit(1)
-    return max(wheels, key=lambda p: p.stat().st_mtime)
+    wheel = max(wheels, key=lambda p: p.stat().st_mtime)
+    validateWheel(wheel)
+    return wheel
 
 
 # ── Step 2: Pre-installed Python distribution ─────────────────────────────────

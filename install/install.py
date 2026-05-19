@@ -313,7 +313,7 @@ def removeCodexServerToml(existingText: str, serverName: str) -> Tuple[str, bool
 
 
 def runCommand(command: list[str], allowFailure: bool = False) -> None:
-    result = subprocess.run(command, check=False, capture_output=True, text=True)
+    result = subprocess.run(command, check=False, capture_output=True, text=True, encoding="utf-8", errors="replace")
     if result.returncode == 0:
         return
     if allowFailure:
@@ -334,6 +334,8 @@ def warmPyappBinary(binaryPath: Optional[str]) -> None:
             check=False,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=120,
         )
     except Exception:
@@ -527,26 +529,36 @@ def main() -> None:
 
     claudeBackupPath = None
     codexBackupPath = None
+    claudeCliOk = False
+    codexCliOk = False
     if "claude-cli" in installTargets:
         claudeCliPath = getClaudeCliPath()
         if claudeCliPath:
-            installClaudeCliServer(
-                serverName=args.serverName,
-                entry=entry,
-                overwrite=args.overwrite,
-                scope=args.cliScope,
-                cliPath=claudeCliPath,
-            )
+            try:
+                installClaudeCliServer(
+                    serverName=args.serverName,
+                    entry=entry,
+                    overwrite=args.overwrite,
+                    scope=args.cliScope,
+                    cliPath=claudeCliPath,
+                )
+                claudeCliOk = True
+            except Exception as exc:
+                print(f"Warning: Claude CLI installation failed: {exc}")
 
     if "codex-cli" in installTargets:
         codexCliPath = getCodexCliPath()
         if codexCliPath:
-            installCodexCliServer(
-                serverName=args.serverName,
-                entry=entry,
-                overwrite=args.overwrite,
-                cliPath=codexCliPath,
-            )
+            try:
+                installCodexCliServer(
+                    serverName=args.serverName,
+                    entry=entry,
+                    overwrite=args.overwrite,
+                    cliPath=codexCliPath,
+                )
+                codexCliOk = True
+            except Exception as exc:
+                print(f"Warning: Codex CLI installation failed: {exc}")
 
     if "codex-desktop" in installTargets:
         installer = CodexConfigInstaller(codexConfigPath)
@@ -565,10 +577,10 @@ def main() -> None:
     warmPyappBinary(binaryPath)
 
     installedTargets = []
-    if "claude-cli" in installTargets and getClaudeCliPath():
+    if claudeCliOk:
         print(f"Installed ffl-mcp into Claude Code CLI (scope: {args.cliScope}).")
         installedTargets.append("claude-cli")
-    if "codex-cli" in installTargets and getCodexCliPath():
+    if codexCliOk:
         print("Installed ffl-mcp into Codex CLI.")
         installedTargets.append("codex-cli")
     if "codex-desktop" in installTargets:

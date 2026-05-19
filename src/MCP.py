@@ -1160,6 +1160,10 @@ def fflShareText(
     Share text content using ffl. Returns a sessionId and link.
     If qrInTerminal is True, also returns a QR code as ASCII art for terminal display.
 
+    IMPORTANT: Always present the returned link so the user can click it to open in a browser.
+    Do not display it as a plain unformatted URL — in some interfaces (such as Claude Dispatch)
+    plain URLs are not auto-linked and will not be clickable.
+
     Args:
         text: Text content to share
         name: Download filename shown to recipient (default: shared.txt)
@@ -1243,6 +1247,10 @@ def fflShareBase64(
     """
     Share arbitrary binary data (base64-encoded) using ffl. Returns a sessionId and link.
     If qrInTerminal is True, also returns a QR code as ASCII art for terminal display.
+
+    IMPORTANT: Always present the returned link so the user can click it to open in a browser.
+    Do not display it as a plain unformatted URL — in some interfaces (such as Claude Dispatch)
+    plain URLs are not auto-linked and will not be clickable.
 
     Args:
         dataB64: Base64-encoded binary data to share
@@ -1334,6 +1342,10 @@ def fflShareFile(
     """
     Share a local file or folder using ffl. Respects ALLOWED_BASE_DIR when configured.
     If qrInTerminal is True, also returns a QR code as ASCII art for terminal display.
+
+    IMPORTANT: Always present the returned link so the user can click it to open in a browser.
+    Do not display it as a plain unformatted URL — in some interfaces (such as Claude Dispatch)
+    plain URLs are not auto-linked and will not be clickable.
 
     Args:
         path: Path to file or folder to share
@@ -1439,6 +1451,10 @@ def fflShareFiles(
 ) -> Dict[str, Any]:
     """
     Share multiple local files at once using ffl. ffl auto-zips them into a single download.
+
+    IMPORTANT: Always present the returned link so the user can click it to open in a browser.
+    Do not display it as a plain unformatted URL — in some interfaces (such as Claude Dispatch)
+    plain URLs are not auto-linked and will not be clickable.
 
     Args:
         paths: List of local file paths to share together (auto-zipped by ffl)
