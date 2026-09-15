@@ -73,6 +73,30 @@ class FFLBindingTest(unittest.TestCase):
             "data": {"bytes": 1024},
         }])
 
+    def testShareTextStreamsWithoutCreatingTemporaryFile(self):
+        session = FakeShareSession()
+        with patch.object(MCP, "fflUseStdin", True), \
+             patch.object(MCP.ffl, "share_stream", return_value=session) as shareStream, \
+             patch.object(MCP, "createTempFile") as createTempFile:
+            result = MCP.fflShareText("stream me", name="message.txt")
+
+        self.assertEqual(result["link"], session.link)
+        self.assertFalse(createTempFile.called)
+        source, contentName = shareStream.call_args.args[:2]
+        self.assertEqual(contentName, "message.txt")
+        self.assertEqual(source.read(), b"stream me")
+
+    def testShareBase64UsesBindingTemporaryOwnershipWhenNotStreaming(self):
+        session = FakeShareSession()
+        with patch.object(MCP, "fflUseStdin", False), \
+             patch.object(MCP.ffl, "share_bytes", return_value=session) as shareBytes, \
+             patch.object(MCP, "createTempFile") as createTempFile:
+            result = MCP.fflShareBase64("AP+AQQ==", name="payload.bin")
+
+        self.assertEqual(result["link"], session.link)
+        self.assertFalse(createTempFile.called)
+        self.assertEqual(shareBytes.call_args.args[:2], (b"\x00\xff\x80A", "payload.bin"))
+
 
 if __name__ == "__main__":
     unittest.main()

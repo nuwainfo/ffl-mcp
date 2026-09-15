@@ -17,6 +17,7 @@
 import argparse
 import base64
 import hashlib
+import io
 import json
 import logging
 import mimetypes
@@ -1026,7 +1027,10 @@ def shareWithFfl(
             session = ffl.share(shareTarget, **shareOptions)
         else:
             contentName = shareOptions.pop("name") or "shared.bin"
-            session = ffl.share_bytes(stdinBytes, contentName, **shareOptions)
+            if fflUseStdin:
+                session = ffl.share_stream(io.BytesIO(stdinBytes), contentName, **shareOptions)
+            else:
+                session = ffl.share_bytes(stdinBytes, contentName, **shareOptions)
     except Exception:
         if hookServer:
             hookServer.stop()
@@ -1231,8 +1235,6 @@ def fflShareText(
         enableReporting: Enable ffl error reporting for diagnostics (disabled by default)
     """
     textBytes = text.encode("utf-8")
-    tempPaths: List[str] = []
-
     kwargs = dict(
         recipientAuth=recipientAuth,
         pickupCode=pickupCode,
@@ -1247,16 +1249,8 @@ def fflShareText(
         enableReporting=enableReporting,
     )
 
-    if fflUseStdin:
-        return shareWithFfl(
-            "-", textBytes, tempPaths, name, e2ee, authUser, authPassword, maxDownloads, timeoutSeconds,
-            waitLinkSeconds, hookUrl, proxy, qrInTerminal, **kwargs
-        )
-
-    tempPath = createTempFile(name, textBytes)
-    tempPaths.append(tempPath)
     return shareWithFfl(
-        tempPath, None, tempPaths, name, e2ee, authUser, authPassword, maxDownloads, timeoutSeconds, waitLinkSeconds,
+        "-", textBytes, [], name, e2ee, authUser, authPassword, maxDownloads, timeoutSeconds, waitLinkSeconds,
         hookUrl, proxy, qrInTerminal, **kwargs
     )
 
@@ -1319,8 +1313,6 @@ def fflShareBase64(
         enableReporting: Enable ffl error reporting for diagnostics (disabled by default)
     """
     rawBytes = base64.b64decode(dataB64, validate=True)
-    tempPaths: List[str] = []
-
     kwargs = dict(
         recipientAuth=recipientAuth,
         pickupCode=pickupCode,
@@ -1335,16 +1327,8 @@ def fflShareBase64(
         enableReporting=enableReporting,
     )
 
-    if fflUseStdin:
-        return shareWithFfl(
-            "-", rawBytes, tempPaths, name, e2ee, authUser, authPassword, maxDownloads, timeoutSeconds, waitLinkSeconds,
-            hookUrl, proxy, qrInTerminal, **kwargs
-        )
-
-    tempPath = createTempFile(name, rawBytes)
-    tempPaths.append(tempPath)
     return shareWithFfl(
-        tempPath, None, tempPaths, name, e2ee, authUser, authPassword, maxDownloads, timeoutSeconds, waitLinkSeconds,
+        "-", rawBytes, [], name, e2ee, authUser, authPassword, maxDownloads, timeoutSeconds, waitLinkSeconds,
         hookUrl, proxy, qrInTerminal, **kwargs
     )
 
