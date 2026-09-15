@@ -97,6 +97,49 @@ class FFLBindingTest(unittest.TestCase):
         self.assertFalse(createTempFile.called)
         self.assertEqual(shareBytes.call_args.args[:2], (b"\x00\xff\x80A", "payload.bin"))
 
+    def testDownloadReturnsBindingMetadataInsteadOfParsingCliOutput(self):
+        downloadResult = SimpleNamespace(
+            return_code=0,
+            output_path=Path("received.bin"),
+            transfer_mode=SimpleNamespace(name="WEBRTC_P2P"),
+        )
+        with patch.object(MCP.ffl, "download", return_value=downloadResult) as download:
+            result = MCP.fflDownload(
+                "https://ffl.example.test/share",
+                outputPath="received.bin",
+                resume=True,
+                pickupCode="123456",
+            )
+
+        self.assertEqual(result, {
+            "ok": True,
+            "returncode": 0,
+            "url": "https://ffl.example.test/share",
+            "transferMode": "webrtc_p2p",
+            "outputPath": "received.bin",
+        })
+        self.assertTrue(download.call_args.kwargs["resume"])
+        self.assertEqual(download.call_args.kwargs["pickup_code"], "123456")
+
+    def testKeygenReturnsPathsReportedByBinding(self):
+        keygenResult = SimpleNamespace(
+            return_code=0,
+            private_key_path=Path("alice.fflkey"),
+            public_key_path=Path("alice.fflpub"),
+            stdout="Generated key pair\n",
+        )
+        with patch.object(MCP.ffl, "keygen", return_value=keygenResult) as keygen:
+            result = MCP.fflKeygen("alice")
+
+        self.assertEqual(result, {
+            "ok": True,
+            "returncode": 0,
+            "privateKeyPath": "alice.fflkey",
+            "publicKeyPath": "alice.fflpub",
+            "output": "Generated key pair",
+        })
+        self.assertEqual(keygen.call_args.args, ("alice",))
+
 
 if __name__ == "__main__":
     unittest.main()
