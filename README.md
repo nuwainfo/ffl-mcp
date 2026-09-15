@@ -3,7 +3,7 @@ MCP server for ffl. Let AI share anything for you.
 
 Backed by [ffl](https://github.com/nuwainfo/ffl), which turns any file/folder into an HTTPS link.
 
-This is a minimal MCP server that shells out to `ffl` / `ffl.com` locally.
+This MCP server uses the `ffl-python` binding locally.
 No file contents are sent to the LLM; the model only triggers local `ffl`.
 
 This demo shows collaborative debugging: Claude on the left shares a local environment (DB + logs) via P2P link, Claude on the right downloads and diagnoses the error. In this scenario, the two Claudes represent different people working on separate machines.
@@ -94,10 +94,6 @@ uvx --from git+https://github.com/nuwainfo/ffl-mcp install --codex-config /path/
 Prereq: `uv` installed.
 
 ```bash
-# optional: override embedded ffl.com (APE) or use "ffl" on PATH
-export FFL_BIN="$HOME/bin/ffl.com"
-chmod +x "$FFL_BIN"
-
 # optional safety: restrict file sharing to a directory
 export ALLOWED_BASE_DIR="$HOME/Downloads"
 
@@ -106,8 +102,6 @@ export FFL_USE_STDIN=1
 
 uvx --from git+https://github.com/nuwainfo/ffl-mcp ffl-mcp
 ```
-
----
 
 ## MCP Config (manual JSON)
 
@@ -222,8 +216,7 @@ Generates an RSA keypair for passwordless `pubkey` recipient auth:
 ## Notes
 
 - `FFL_USE_STDIN=1` avoids writing text/base64 payloads to disk.
-- `FFL_RUN_MODE=python` runs the Core.py CLI (requires `FFL_CORE_PATH`).
-- `FFL_USE_HOOK=1` starts a local webhook server and passes it to `ffl` for real-time link/progress events.
+- Folder and multi-file previews start a local webhook server so FFL can register preview routes.
 - `FFL_DEBUG=1` saves ffl output to a temp log file; path returned as `debugLogPath`. Set `FFL_DEBUG=/path/to/log.txt` to use a fixed path.
 - `ALLOWED_BASE_DIR` restricts `fflShareFile`/`fflShareFiles` to a specific directory.
 
@@ -238,15 +231,5 @@ python -m unittest discover -s tests -p "*Test.py" -v
 # All tests including share/download round-trips (requires network)
 FFL_INTEGRATION_TESTS=1 python -m unittest discover -s tests -p "*Test.py" -v
 ```
-
 ---
 
-## WSL2 Users
-
-If you encounter `TLSError([0x6300])` errors, run this command to disable Windows interop for `.com` files:
-
-```bash
-sudo sh -c 'echo -1 > /proc/sys/fs/binfmt_misc/WSLInterop'
-```
-
-This allows ffl.com (APE binary) to run natively on Linux instead of being executed through Windows.

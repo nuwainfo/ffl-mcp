@@ -1159,7 +1159,8 @@ class PreviewSidecarPolicyTest(unittest.TestCase):
             filePath = tmp.name
         try:
             with patch.object(MCP, "shareWithFfl", return_value={"link": "https://ffl.example.com/abc"}) as mocked:
-                result = MCP.fflShareFile.fn(filePath, preview=True)
+                shareFile = getattr(MCP.fflShareFile, "fn", MCP.fflShareFile)
+                result = shareFile(filePath, preview=True)
         finally:
             os.unlink(filePath)
 
@@ -1169,7 +1170,8 @@ class PreviewSidecarPolicyTest(unittest.TestCase):
     def testFolderShareEnablesPreviewSidecarAndKeepsCleanLink(self):
         with tempfile.TemporaryDirectory() as tmpDir:
             with patch.object(MCP, "shareWithFfl", return_value={"link": "https://ffl.example.com/abc"}) as mocked:
-                result = MCP.fflShareFile.fn(tmpDir, preview=True)
+                shareFile = getattr(MCP.fflShareFile, "fn", MCP.fflShareFile)
+                result = shareFile(tmpDir, preview=True)
 
         self.assertEqual(result["link"], "https://ffl.example.com/abc")
         self.assertTrue(mocked.call_args.kwargs["enablePreviewSidecar"])
@@ -1184,7 +1186,8 @@ class PreviewSidecarPolicyTest(unittest.TestCase):
                 paths.append(path)
 
             with patch.object(MCP, "shareWithFfl", return_value={"link": "https://ffl.example.com/abc"}) as mocked:
-                result = MCP.fflShareFiles.fn(paths, preview=True)
+                shareFiles = getattr(MCP.fflShareFiles, "fn", MCP.fflShareFiles)
+                result = shareFiles(paths, preview=True)
 
         self.assertEqual(result["link"], "https://ffl.example.com/abc")
         self.assertTrue(mocked.call_args.kwargs["enablePreviewSidecar"])

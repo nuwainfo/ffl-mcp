@@ -37,6 +37,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 from urllib.parse import parse_qs, quote, urlparse
 
 from fastmcp import FastMCP
+import ffl
 
 logger = logging.getLogger("fflMcp")
 logger.setLevel(logging.DEBUG)
@@ -649,12 +650,25 @@ class SessionStore:
         with self.lock:
             return [{
                 "sessionId": sessionId,
-                "pid": info["process"].pid,
+                "pid": info["session"].pid,
                 "link": info["link"],
                 "ageSeconds": int(now - info["startedAt"]),
-                "cmd": info["command"],
-                "eventCount": info["hookServer"].getEventCount() if info.get("hookServer") else 0,
+                "cmd": list(info["session"].argv),
+                "eventCount": len(self.getSessionEvents(info, fflHookMaxEvents)),
             } for sessionId, info in self.sessions.items()]
+
+    @staticmethod
+    def getSessionEvents(sessionInfo: Dict[str, Any], limit: int) -> List[Dict[str, Any]]:
+        hookServer = sessionInfo.get("hookServer")
+        if hookServer:
+            return hookServer.getEvents(limit)
+
+        events = sessionInfo["session"].event_history[-limit:]
+        return [{
+            "event": event.name,
+            "timestamp": event.timestamp,
+            "data": dict(event.data),
+        } for event in events]
 
     def getSession(self, sessionId: str) -> Optional[Dict[str, Any]]:
         self.pruneSessions()
@@ -666,18 +680,10 @@ class SessionStore:
         if not sessionInfo:
             return {"ok": False, "error": "not_found"}
 
-        process = sessionInfo["process"]
         try:
-            process.terminate()
-            process.wait(timeout=3)
+            sessionInfo["session"].stop()
         except Exception as exc:
-            logger.warning("Failed to terminate session %s: %s", sessionId, exc)
-        finally:
-            if process.poll() is None:
-                try:
-                    process.kill()
-                except Exception as exc:
-                    logger.warning("Failed to kill session %s: %s", sessionId, exc)
+            logger.warning("Failed to stop session %s: %s", sessionId, exc)
 
         self.cleanupSession(sessionId)
         return {"ok": True, "sessionId": sessionId}
@@ -687,6 +693,10 @@ class SessionStore:
             sessionInfo = self.sessions.pop(sessionId, None)
         if not sessionInfo:
             return
+        try:
+            sessionInfo["session"].close()
+        except Exception as exc:
+            logger.debug("Failed to close session %s: %s", sessionId, exc)
         hookServer = sessionInfo.get("hookServer")
         if hookServer:
             try:
@@ -702,7 +712,7 @@ class SessionStore:
     def pruneSessions(self) -> None:
         with self.lock:
             endedSessionIds = [
-                sessionId for sessionId, info in self.sessions.items() if info["process"].poll() is not None
+                sessionId for sessionId, info in self.sessions.items() if not info["session"].running
             ]
         for sessionId in endedSessionIds:
             self.cleanupSession(sessionId)
@@ -976,40 +986,72 @@ def shareWithFfl(
     Common sharing logic for all share functions.
     Handles hook server initialization, argument building, and process spawning.
     """
+    del waitLinkSeconds
     hookInfo = startHookServerIfNeeded(hookUrl, enablePreviewSidecar=enablePreviewSidecar)
     hookServer = hookInfo["hookServer"]
     effectiveHookUrl = hookInfo["hookUrl"]
+    captureHookEvents = fflUseHook and hookServer is None
 
-    args = buildShareArgs(
-        shareTarget,
-        name,
-        e2ee,
-        authUser,
-        authPassword,
-        maxDownloads,
-        timeoutSeconds,
-        effectiveHookUrl,
-        proxy,
-        exclude=exclude,
-        recipientAuth=recipientAuth,
-        pickupCode=pickupCode,
-        recipientPublicKey=recipientPublicKey,
-        recipientEmail=recipientEmail,
-        alias=alias,
-        receipt=receipt,
-        receiptConfirm=receiptConfirm,
-        forceRelay=forceRelay,
-        upload=upload,
-        resumeUpload=resumeUpload,
-        vfs=vfs,
-        preferredTunnel=preferredTunnel,
-        port=port,
-        invite=invite,
-        pause=pause,
-        enableReporting=enableReporting,
-    )
+    try:
+        shareOptions = dict(
+            name=name,
+            e2ee=e2ee,
+            auth_user=authUser,
+            auth_password=authPassword,
+            max_downloads=maxDownloads,
+            timeout_seconds=timeoutSeconds,
+            hook_url=effectiveHookUrl,
+            capture_hook_events=captureHookEvents,
+            proxy=proxy,
+            exclude=exclude,
+            recipient_auth=recipientAuth,
+            pickup_code=pickupCode,
+            recipient_public_key=recipientPublicKey,
+            recipient_email=recipientEmail,
+            alias=alias,
+            receipt=receipt,
+            receipt_confirm=receiptConfirm,
+            force_relay=forceRelay,
+            upload=upload,
+            resume_upload=resumeUpload,
+            vfs=vfs,
+            preferred_tunnel=preferredTunnel,
+            port=port,
+            invite=invite,
+            pause=pause,
+            enable_reporting=enableReporting,
+            qr=True if qrInTerminal else None,
+        )
+        if stdinBytes is None:
+            session = ffl.share(shareTarget, **shareOptions)
+        else:
+            contentName = shareOptions.pop("name") or "shared.bin"
+            session = ffl.share_bytes(stdinBytes, contentName, **shareOptions)
+    except Exception:
+        if hookServer:
+            hookServer.stop()
+        raise
 
-    return spawnFflAndWaitLink(args, stdinBytes, waitLinkSeconds, tempPaths, hookServer, None, qrInTerminal)
+    sessionId = str(uuid.uuid4())
+    sessionStore.addSession({
+        "sessionId": sessionId,
+        "session": session,
+        "link": session.link,
+        "startedAt": time.time(),
+        "tempPaths": tempPaths,
+        "hookServer": hookServer,
+    })
+    result = {
+        "sessionId": sessionId,
+        "link": session.link,
+        "pid": session.pid,
+        "cmd": list(session.argv),
+    }
+    if qrInTerminal and isinstance(session.stdout, str):
+        qrCode = extractQrCodeFromOutput(session.stdout)
+        if qrCode:
+            result["qrCode"] = qrCode
+    return result
 
 
 def spawnFflAndWaitLink(
@@ -1561,6 +1603,33 @@ def fflDownload(
     Returns:
         Dictionary with download status and output file path
     """
+    try:
+        downloadResult = ffl.download(
+            url,
+            output_path=outputPath,
+            resume=resume,
+            auth_user=authUser,
+            auth_password=authPassword,
+            proxy=proxy,
+            recipient_auth=recipientAuth,
+            pickup_code=pickupCode,
+            recipient_private_key=recipientPrivateKey,
+            enable_reporting=enableReporting,
+        )
+    except Exception as exc:
+        return {"ok": False, "url": url, "error": f"Download failed: {exc}"}
+
+    transferMode = downloadResult.transfer_mode.name.lower()
+    response = {
+        "ok": downloadResult.return_code == 0,
+        "returncode": downloadResult.return_code,
+        "url": url,
+        "transferMode": transferMode,
+    }
+    if downloadResult.output_path is not None:
+        response["outputPath"] = str(downloadResult.output_path)
+    return response
+
     command = buildBaseCommand() + ["download", url]
 
     if outputPath:
@@ -1758,6 +1827,19 @@ def fflKeygen(
     Returns:
         Dictionary with returncode and output describing the generated key paths
     """
+    try:
+        keygenResult = ffl.keygen(name, enable_reporting=False)
+    except Exception as exc:
+        return {"ok": False, "error": f"Key generation failed: {exc}"}
+
+    return {
+        "ok": keygenResult.return_code == 0,
+        "returncode": keygenResult.return_code,
+        "privateKeyPath": str(keygenResult.private_key_path),
+        "publicKeyPath": str(keygenResult.public_key_path),
+        "output": keygenResult.stdout.strip(),
+    }
+
     command = buildBaseCommand() + ["keygen"]
 
     if name:
@@ -1821,15 +1903,14 @@ def fflGetSession(sessionId: str) -> Dict[str, Any]:
     sessionInfo = sessionStore.getSession(sessionId)
     if not sessionInfo:
         return {"ok": False, "error": "not_found"}
-    hookServer = sessionInfo.get("hookServer")
-    eventCount = hookServer.getEventCount() if hookServer else 0
+    eventCount = len(sessionStore.getSessionEvents(sessionInfo, fflHookMaxEvents))
     return {
         "ok": True,
         "sessionId": sessionId,
-        "pid": sessionInfo["process"].pid,
+        "pid": sessionInfo["session"].pid,
         "link": sessionInfo["link"],
         "ageSeconds": int(time.time() - sessionInfo["startedAt"]),
-        "cmd": sessionInfo["command"],
+        "cmd": list(sessionInfo["session"].argv),
         "eventCount": eventCount,
     }
 
@@ -1840,10 +1921,8 @@ def fflGetSessionEvents(sessionId: str, limit: int = 50) -> Dict[str, Any]:
     sessionInfo = sessionStore.getSession(sessionId)
     if not sessionInfo:
         return {"ok": False, "error": "not_found"}
-    hookServer = sessionInfo.get("hookServer")
-    if not hookServer:
-        return {"ok": True, "sessionId": sessionId, "events": []}
-    return {"ok": True, "sessionId": sessionId, "events": hookServer.getEvents(limit)}
+    events = sessionStore.getSessionEvents(sessionInfo, limit)
+    return {"ok": True, "sessionId": sessionId, "events": events}
 
 
 def main() -> None:

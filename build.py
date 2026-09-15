@@ -108,8 +108,8 @@ def buildWheel():
     print("\n[1/6] Building wheel...")
     DIST_DIR.mkdir(exist_ok=True)
     # Must use --wheel to build directly from source tree.
-    # Plain `uv build` goes sdist→wheel, and the sdist intentionally only
-    # includes src/ffl.com (binary), so the wheel would be missing all .py files.
+    # Build directly from the source tree so the standalone package contains
+    # the MCP server and its ffl-python dependency metadata.
     run(["uv", "build", "--wheel", "--out-dir", str(DIST_DIR)])
 
 
@@ -186,14 +186,32 @@ def prepareDistribution(wheelPath: Path, rebuildDist: bool):
         print(f"ERROR: Python executable not found at {pythonExe}", file=sys.stderr)
         sys.exit(1)
 
+    fflPythonSource = os.environ.get("FFL_PYTHON_SOURCE")
+    if fflPythonSource:
+        sourcePath = Path(fflPythonSource).resolve()
+        if not (sourcePath / "pyproject.toml").is_file():
+            raise RuntimeError(f"FFL_PYTHON_SOURCE is not an ffl-python project: {sourcePath}")
+        print(f"  Pre-installing local ffl-python from {sourcePath}...")
+        run([
+            str(pythonExe), "-m", "pip", "install", str(sourcePath),
+            "--no-deps", "--force-reinstall", "--quiet",
+        ])
+        run([
+            str(pythonExe), "-m", "pip", "install", "fastmcp>=2,<3",
+            "--quiet",
+        ])
+
     print(f"  Pre-installing {wheelPath.name} and all dependencies into distribution...")
-    run([
+    installCommand = [
         str(pythonExe), "-m", "pip", "install",
         str(wheelPath.resolve()),
         "--force-reinstall",
         "--no-warn-script-location",
         "--quiet",
-    ])
+    ]
+    if fflPythonSource:
+        installCommand.append("--no-deps")
+    run(installCommand)
     print("  Packages installed.")
 
     print("  Archiving distribution with pre-installed packages...")
