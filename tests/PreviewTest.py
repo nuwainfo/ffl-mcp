@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """
-Tests for src/preview.py and the HookServer preview endpoint mechanism.
+Tests for src/Preview.py and the HookServer preview endpoint mechanism.
 
   PngEncoderTest            — stdlib PNG encoder produces structurally valid PNG bytes
   ComtypesInterfaceTest     — comtypes COM interface definitions (win32 only)
@@ -49,7 +49,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 sys.path.insert(0, str(Path(__file__).parent))
 
-import preview as previewMod
+import Preview as previewMod
 import MCP
 
 

@@ -45,7 +45,7 @@ if ($ExeUrl) {
     $TmpExe = Join-Path $env:TEMP "ffl-mcp-installer-tmp.exe"
     Write-Host "Downloading..."
     Invoke-WebRequest -Uri $ExeUrl -OutFile $TmpExe -UseBasicParsing
-    Write-Host "Registering MCP server with Claude and Codex..."
+    Write-Host "Registering MCP server with Claude, Codex, and Grok Build..."
     & $TmpExe install
     Remove-Item $TmpExe -Force -ErrorAction SilentlyContinue
 } else {
@@ -61,4 +61,4 @@ if ($ExeUrl) {
 }
 
 Write-Host ""
-Write-Host "Done! Restart Claude/Codex to connect the ffl-mcp server."
+Write-Host "Done! Restart your MCP client or reload its MCP servers."

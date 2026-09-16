@@ -23,11 +23,11 @@ SetCompressor /SOLID lzma
 !define MUI_ABORTWARNING
 !define MUI_WELCOMEPAGE_TITLE "${APP_NAME} Setup"
 !define MUI_WELCOMEPAGE_TEXT  "This wizard will install ${APP_NAME} and register \
-  it as an MCP server with Claude Desktop and Claude Code.$\n$\n\
+  it as an MCP server with Claude, Codex, and Grok Build.$\n$\n\
   Click Install to continue."
 !define MUI_FINISHPAGE_TITLE "Installation Complete"
 !define MUI_FINISHPAGE_TEXT  "${APP_NAME} has been installed.$\n$\n\
-  Please restart Claude Desktop or Claude Code to activate the MCP server."
+  Please restart or reload MCP servers in your client to activate it."
 !define MUI_FINISHPAGE_NOAUTOCLOSE
 
 ; -- Installer pages ----------------------------------------------------------

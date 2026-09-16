@@ -4,20 +4,20 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ffl-mcp"
-version = "0.3.3"
+version = "0.4.0"
 description = "Local-only MCP server for FastFileLink via ffl-python"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 dependencies = [
   "ffl-python>=0.1.4",
-  "fastmcp>=4,<5",
+  "fastmcp>=4,<4.0.4",
   "comtypes>=1.0; sys_platform == 'win32'"
 ]
 
 [project.scripts]
-ffl-mcp = "src.entrypoint:main"
-install = "install.install:main"
+ffl-mcp = "src.Entrypoint:main"
+install = "install.Install:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src", "install"]

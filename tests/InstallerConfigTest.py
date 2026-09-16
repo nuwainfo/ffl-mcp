@@ -15,33 +15,37 @@
 # limitations under the License.
 """Tests for installer config generation."""
 
+import os
 import pathlib
 import tempfile
 import unittest
 
-from install.install import (
-    CodexConfigInstaller,
-    buildCodexServerToml,
-    removeCodexServerToml,
+from build import generateInstallScript, generateUninstallScript
+from install.Backends import (
+    TomlMcpBackend,
+    buildTomlServerConfig,
+    getDefaultGrokConfigPath,
+    removeTomlServerConfig,
 )
+from install.Install import normalizeInstallTargets
 
 
-class CodexConfigTest(unittest.TestCase):
+class InstallerConfigTest(unittest.TestCase):
 
-    def testBuildCodexServerToml(self):
+    def testBuildTomlServerConfig(self):
         entry = {
             "command": "uvx",
             "args": ["--from", "git+https://github.com/nuwainfo/ffl-mcp", "ffl-mcp"],
             "env": {"FFL_USE_STDIN": "1"},
         }
-        text = buildCodexServerToml("ffl", entry)
+        text = buildTomlServerConfig("ffl", entry)
         self.assertIn("[mcp_servers.ffl]", text)
         self.assertIn('command = "uvx"', text)
         self.assertIn('args = ["--from", "git+https://github.com/nuwainfo/ffl-mcp", "ffl-mcp"]', text)
         self.assertIn("[mcp_servers.ffl.env]", text)
         self.assertIn('FFL_USE_STDIN = "1"', text)
 
-    def testRemoveCodexServerTomlOnlyRemovesTargetServer(self):
+    def testRemoveTomlServerConfigOnlyRemovesTargetServer(self):
         existingText = """
 [mcp_servers.other]
 command = "npx"
@@ -55,20 +59,79 @@ FFL_USE_STDIN = "1"
 [mcp_servers.after]
 command = "node"
 """.lstrip()
-        updatedText, removed = removeCodexServerToml(existingText, "ffl")
+        updatedText, removed = removeTomlServerConfig(existingText, "ffl")
         self.assertTrue(removed)
         self.assertNotIn("[mcp_servers.ffl]", updatedText)
         self.assertNotIn("[mcp_servers.ffl.env]", updatedText)
         self.assertIn("[mcp_servers.other]", updatedText)
         self.assertIn("[mcp_servers.after]", updatedText)
 
-    def testCodexInstallerRejectsExistingWithoutOverwrite(self):
+    def testTomlBackendRejectsExistingWithoutOverwrite(self):
         with tempfile.TemporaryDirectory() as tempDir:
-            installer = CodexConfigInstaller(pathlib.Path(tempDir) / "config.toml")
+            configPath = pathlib.Path(tempDir) / "config.toml"
+            installer = TomlMcpBackend("codex", "Codex", configPath)
             entry = {"command": "uvx", "args": ["ffl-mcp"], "env": {}}
-            configText = buildCodexServerToml("ffl", entry)
+            installer.install("ffl", entry, overwrite=False)
             with self.assertRaises(RuntimeError):
-                installer.addServer(configText, "ffl", entry, overwrite=False)
+                installer.install("ffl", entry, overwrite=False)
+
+    def testGrokInstallerWritesCompatibleMcpServerToml(self):
+        with tempfile.TemporaryDirectory() as tempDir:
+            configPath = pathlib.Path(tempDir) / "config.toml"
+            installer = TomlMcpBackend("grok-build", "Grok Build", configPath)
+            entry = {
+                "command": "ffl-mcp.exe",
+                "args": [],
+                "env": {"FFL_USE_STDIN": "1"},
+            }
+            existingText = '[mcp_servers.other]\ncommand = "npx"\n'
+
+            configPath.write_text(existingText, encoding="utf-8")
+            result = installer.install("ffl", entry, overwrite=False)
+            updatedText = configPath.read_text(encoding="utf-8")
+
+            self.assertEqual(result.target, "grok-build")
+            self.assertIn('[mcp_servers.other]', updatedText)
+            self.assertIn('[mcp_servers.ffl]', updatedText)
+            self.assertIn('command = "ffl-mcp.exe"', updatedText)
+            self.assertIn('[mcp_servers.ffl.env]', updatedText)
+            self.assertIn('FFL_USE_STDIN = "1"', updatedText)
+
+    def testDefaultGrokConfigPathHonorsGrokHome(self):
+        previousValue = os.environ.get("GROK_HOME")
+        try:
+            os.environ["GROK_HOME"] = "C:/test/grok-home"
+            self.assertEqual(getDefaultGrokConfigPath(), pathlib.Path("C:/test/grok-home/config.toml"))
+        finally:
+            if previousValue is None:
+                os.environ.pop("GROK_HOME", None)
+            else:
+                os.environ["GROK_HOME"] = previousValue
+
+    def testLegacyTargetsResolveToCanonicalBackends(self):
+        targets = normalizeInstallTargets([
+            "claude-cli",
+            "codex-cli",
+            "codex-desktop",
+            "grok",
+        ])
+        self.assertEqual(targets, ["claude-code", "codex", "grok-build"])
+
+    def testStandaloneInstallerDelegatesToTheSameBackend(self):
+        installScript = generateInstallScript()
+        uninstallScript = generateUninstallScript()
+
+        self.assertIn("& $binaryPath install --target all --overwrite", installScript)
+        self.assertIn("& $binaryPath uninstall --target all", uninstallScript)
+        self.assertIn("$installedVersion = & $binaryPath --version", installScript)
+        self.assertNotIn("Codex config", installScript)
+        self.assertNotIn("Grok Build config", installScript)
+
+    def testLocalBindingBuildUsesTheSupportedFastMcpVersion(self):
+        repoRoot = pathlib.Path(__file__).resolve().parents[1]
+        buildText = (repoRoot / "build.py").read_text(encoding="utf-8")
+        self.assertIn("FAST_MCP_REQUIREMENT", buildText)
+        self.assertNotIn('"fastmcp>=2,<3"', buildText)
 
 
 if __name__ == "__main__":

@@ -225,9 +225,9 @@ def parseBasicAuthHeader(headerValue: Optional[str]) -> Optional[Dict[str, str]]
 
 
 try:
-    from src.preview import generateDefaultThumbnail, generateThumbnail
+    from src.Preview import generateDefaultThumbnail, generateThumbnail
 except ImportError:
-    from preview import generateDefaultThumbnail, generateThumbnail
+    from Preview import generateDefaultThumbnail, generateThumbnail
 
 
 class HookRequestHandler(BaseHTTPRequestHandler):

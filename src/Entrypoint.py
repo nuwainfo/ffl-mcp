@@ -26,14 +26,19 @@ decide whether to write a direct binary command or a uvx command.
 
 import os
 import sys
+from importlib.metadata import version
 
 # Must be set before fastmcp is imported (Pydantic settings reads env vars at import time).
 os.environ.setdefault("FASTMCP_SHOW_CLI_BANNER", "false")
 
 
 def main() -> None:
-    if len(sys.argv) > 1 and sys.argv[1] == "install":
-        sys.argv.pop(1)
+    if len(sys.argv) > 1 and sys.argv[1] == "--version":
+        print(version("ffl-mcp"))
+        return
+
+    if len(sys.argv) > 1 and sys.argv[1] in {"install", "uninstall"}:
+        command = sys.argv.pop(1)
 
         # PYAPP is set by PyApp to the path of the running binary (ffl-mcp.exe)
         # when PYAPP_PASS_LOCATION=1 is enabled at build time.
@@ -41,7 +46,9 @@ def main() -> None:
         if binaryPath and binaryPath != "1" and os.path.isfile(binaryPath):
             os.environ["FFL_MCP_BINARY"] = binaryPath
 
-        from install.install import main as installMain
+        from install.Install import main as installMain
+        if command == "uninstall":
+            sys.argv.append("--uninstall")
         installMain()
     else:
         from src.MCP import main as mcpMain

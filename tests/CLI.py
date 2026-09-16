@@ -56,7 +56,7 @@ def parseArgs() -> argparse.Namespace:
     parser.add_argument(
         "--server-command",
         nargs=argparse.REMAINDER,
-        help="Custom MCP server command. Default: current Python runs src.entrypoint.",
+        help="Custom MCP server command. Default: current Python runs src.Entrypoint.",
     )
     return parser.parse_args()
 
@@ -98,7 +98,7 @@ async def run(args: argparse.Namespace) -> int:
 
     command = args.server_command
     if not command:
-        command = [sys.executable, "-c", "import src.entrypoint; src.entrypoint.main()"]
+        command = [sys.executable, "-c", "import src.Entrypoint; src.Entrypoint.main()"]
     command = normalizeCommand(command, repoRoot)
 
     sessionId = None

@@ -45,6 +45,8 @@ This demo shows collaborative debugging: Claude on the left shares a local envir
 
 Download and run **[ffl-mcp-setup.exe](https://github.com/nuwainfo/ffl-mcp/releases/latest/download/ffl-mcp-setup.exe)** from the latest release.
 
+It registers the server with Claude Desktop, Claude Code, Codex, and Grok Build.
+
 No command line needed — the installer registers ffl-mcp with Claude Desktop and Claude Code automatically.
 
 ### Linux / macOS — one-liner
@@ -53,7 +55,7 @@ No command line needed — the installer registers ffl-mcp with Claude Desktop a
 curl -fsSL https://raw.githubusercontent.com/nuwainfo/ffl-mcp/refs/heads/main/install.sh | bash
 ```
 
-Downloads the platform binary from the latest GitHub release and runs `ffl-mcp install` to register with Claude. Falls back to `uvx` automatically if no binary is available for your platform.
+Downloads the platform binary from the latest GitHub release and runs `ffl-mcp install` to register with Claude, Codex, and Grok Build. Falls back to `uvx` automatically if no binary is available for your platform.
 
 ### Windows — one-liner (PowerShell)
 
@@ -61,7 +63,7 @@ Downloads the platform binary from the latest GitHub release and runs `ffl-mcp i
 iwr -useb https://raw.githubusercontent.com/nuwainfo/ffl-mcp/refs/heads/main/install.ps1 | iex
 ```
 
-Downloads `ffl-mcp.exe` from the latest GitHub release and registers it with Claude.
+Downloads `ffl-mcp.exe` from the latest GitHub release and registers it with Claude, Codex, and Grok Build.
 
 ### uvx (no binary, requires uv)
 
@@ -72,21 +74,23 @@ uvx --from git+https://github.com/nuwainfo/ffl-mcp install
 Targets can be controlled with `--target` (default: all):
 
 ```bash
-uvx --from git+https://github.com/nuwainfo/ffl-mcp install --target claude-desktop,codex-desktop,codex-cli
+uvx --from git+https://github.com/nuwainfo/ffl-mcp install --target claude-desktop,claude-code,codex,grok-build
 ```
 
 ```bash
 uvx --from git+https://github.com/nuwainfo/ffl-mcp install --print
 ```
 
-If Claude Code CLI is installed, the installer also runs `claude mcp add` automatically (user scope).
-The installer also writes Codex MCP config to `~/.codex/config.toml` for Codex Desktop/CLI/IDE.
-If Codex CLI is installed, the installer also runs `codex mcp add` automatically.
+`claude-code` uses the Claude Code CLI. `codex` writes the native `~/.codex/config.toml` configuration used by Codex clients. `grok-build` writes `~/.grok/config.toml`, which Grok Build can reload from `/mcps`.
+
+Legacy target names (`claude-cli`, `codex-cli`, `codex-desktop`, and `grok`) remain accepted as aliases. The installer first creates a timestamped backup of any config it changes.
+
 For custom config paths, pass the file:
 
 ```bash
 uvx --from git+https://github.com/nuwainfo/ffl-mcp install --config /path/to/claude_desktop_config.json
 uvx --from git+https://github.com/nuwainfo/ffl-mcp install --codex-config /path/to/codex/config.toml
+uvx --from git+https://github.com/nuwainfo/ffl-mcp install --grok-config /path/to/grok/config.toml
 ```
 
 ### Run directly (development)
