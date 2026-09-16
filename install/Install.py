@@ -90,12 +90,12 @@ def collectEnv(overrides: Dict[str, str]) -> Dict[str, str]:
         value = overrides.get(key)
         if value is None:
             value = os.environ.get(key)
-            
+
         if value is None or value == "":
             continue
-            
+
         env[key] = value
-        
+
     return env
 
 
