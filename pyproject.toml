@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 dependencies = [
-  "ffl-python>=0.1.4",
+  "ffl-python==0.1.4",
   "fastmcp>=4,<4.0.4",
   "comtypes>=1.0; sys_platform == 'win32'"
 ]
