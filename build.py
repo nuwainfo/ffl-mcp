@@ -52,6 +52,7 @@ import shutil
 import subprocess
 import sys
 import tarfile
+import tempfile
 import tomllib
 import urllib.request
 import zipfile
@@ -84,6 +85,7 @@ def _readDependency(packageName: str) -> str:
 
 
 FAST_MCP_REQUIREMENT = _readDependency("fastmcp")
+COMTYPES_REQUIREMENT = _readDependency("comtypes")
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 PYAPP_REPO_ZIP = "https://github.com/ofek/pyapp/archive/refs/heads/master.zip"
@@ -155,6 +157,110 @@ def findWheel() -> Path:
 
 # ── Step 2: Pre-installed Python distribution ─────────────────────────────────
 
+# Top-level site-packages entries confirmed unused by any ffl-mcp code path — see
+# "Why is the final exe so large?" investigation. fastmcp/mcp pull in a large
+# transitive dependency graph (OAuth via Authlib/joserfc, a Redis-backed task queue,
+# OpenAPI-to-tool conversion, the `fastmcp` CLI's own framework, rich's optional
+# renderers, keyring, etc.) that ffl-mcp's stdio tool-serving usage never touches.
+#
+# Verified safe by, in order:
+#   1. A broad in-process exercise calling every @mcp.tool directly + starting the
+#      http/sse transports and sending real requests, diffing sys.modules before/after.
+#   2. Removing the resulting candidates and running the full `tests/*Test.py` suite
+#      against the pruned interpreter.
+#   3. Calling every @mcp.tool over a REAL stdio JSON-RPC session (not direct function
+#      calls) — this is what caught that fastmcp's per-request state store needs
+#      `cachetools`, and that `mcp`'s stdio transport needs pywin32's `pywintypes`/
+#      `pythoncom` on Windows via a `.pth`-activated `win32/lib` path, both of which
+#      are intentionally NOT in this list (do not add them back without re-breaking
+#      that same test).
+# Re-run steps 2 and 3 before adding anything new here — a package can be "never
+# imported" in a quick check yet still be needed by a specific request-handling path
+# (e.g. the state store) that only triggers on a real tool call.
+PRUNE_FROM_ARCHIVE = {
+    "PyWin32.chm",
+    "README.txt",
+    "_yaml",
+    "adodbapi",
+    "aiofile",
+    "annotated_doc",
+    "attr",
+    "attrs",
+    "authlib",
+    "burner_redis",
+    "caio",
+    "certifi",
+    "colorama",
+    "cyclopts",
+    "diskcache",
+    "dns",
+    "docstring_parser",
+    "docutils",
+    "email_validator",
+    "fakeredis",
+    "httpcore",
+    "httpcore2",
+    "httpx",
+    "httpx_sse",
+    "isapi",
+    "jaraco",
+    "joserfc",
+    "jsonref.py",
+    "jsonschema",
+    "jsonschema_path",
+    "jsonschema_specifications",
+    "jwt",
+    "keyring",
+    "lupa",
+    "markdown_it",
+    "mdurl",
+    "more_itertools",
+    "multipart",
+    "openapi_pydantic",
+    "pathable",
+    "pathvalidate",
+    "pip",
+    "prometheus_client",
+    "proxytypes.py",
+    "pygments",
+    "pyperclip",
+    "pythonjsonlogger",
+    "pythonwin",
+    "pywin32.version.txt",
+    "referencing",
+    "rich_rst",
+    "rpds",
+    "shellingham",
+    "sortedcontainers",
+    "truststore",
+    "typer",
+    "win32com",
+    "win32comext",
+    "win32ctypes",
+    "yaml",
+}
+
+
+def buildArchiveFilter():
+    """
+    tarfile filter that drops PRUNE_FROM_ARCHIVE entries from the archived copy only.
+
+    Pruning is applied here (at archive time) rather than by deleting from
+    PYTHON_DIST_DIR directly, because that directory is reused as pip's install
+    target across builds/`--rebuild-dist` runs — deleting `pip` or other packages
+    from it directly would break the next `pip install` into the same directory.
+    """
+    def _filter(tarinfo: tarfile.TarInfo) -> Optional[tarfile.TarInfo]:
+        parts = tarinfo.name.split("/")
+        if len(parts) >= 4 and parts[0] == "python" and parts[1] == "Lib" and parts[2] == "site-packages":
+            if parts[3] in PRUNE_FROM_ARCHIVE:
+                return None
+        return tarinfo
+
+    return _filter
+
+
+
 def downloadPythonDist():
     BUILD_CACHE_DIR.mkdir(exist_ok=True)
     if PYTHON_DIST_ARCHIVE.exists():
@@ -211,7 +317,7 @@ def prepareDistribution(wheelPath: Path, rebuildDist: bool):
             "--no-deps", "--force-reinstall", "--quiet",
         ])
         run([
-            str(pythonExe), "-m", "pip", "install", FAST_MCP_REQUIREMENT,
+            str(pythonExe), "-m", "pip", "install", FAST_MCP_REQUIREMENT, COMTYPES_REQUIREMENT,
             "--quiet",
         ])
 
@@ -232,12 +338,33 @@ def prepareDistribution(wheelPath: Path, rebuildDist: bool):
     ])
     print("  Packages installed.")
 
-    print("  Archiving distribution with pre-installed packages...")
+    print("  Archiving distribution with pre-installed packages (pruning unused deps)...")
     with tarfile.open(PYTHON_PREINSTALLED_ARCHIVE, "w:gz") as tar:
-        tar.add(PYTHON_DIST_DIR / "python", arcname="python")
+        tar.add(PYTHON_DIST_DIR / "python", arcname="python", filter=buildArchiveFilter())
 
     sizeMb = PYTHON_PREINSTALLED_ARCHIVE.stat().st_size / 1_048_576
     print(f"  Pre-installed distribution archived: {PYTHON_PREINSTALLED_ARCHIVE} ({sizeMb:.0f} MB)")
+
+    verifyPrunedDistribution()
+
+
+def verifyPrunedDistribution() -> None:
+    """
+    Extract the just-built archive and run the real test suite against it, using the
+    current repo's tests/src (not whatever got pip-installed into the archive) so this
+    catches PRUNE_FROM_ARCHIVE entries that turn out to be needed by the current code.
+    This is not a substitute for the real-stdio-transport check described above
+    PRUNE_FROM_ARCHIVE (that one requires a real network round trip and isn't worth
+    running on every build) but it does catch the more common "this package is
+    actually imported somewhere" regression automatically.
+    """
+    print("  Verifying pruned distribution against the test suite...")
+    with tempfile.TemporaryDirectory(prefix="ffl-mcp-verify-") as tmpDir:
+        with tarfile.open(PYTHON_PREINSTALLED_ARCHIVE, "r:gz") as tar:
+            tar.extractall(tmpDir, filter="data")
+        verifyPython = Path(tmpDir) / "python" / "python.exe"
+        run([str(verifyPython), "-m", "unittest", "discover", "-s", "tests", "-p", "*Test.py"])
+    print("  Pruned distribution passes the test suite.")
 
 
 # ── Steps 3 & 4: PyApp binary ─────────────────────────────────────────────────
