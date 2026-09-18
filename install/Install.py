@@ -2,6 +2,9 @@
 # -*- coding: utf-8 -*-
 # SPDX-License-Identifier: Apache-2.0
 #
+# FastFileLink CLI - Fast, no-fuss file sharing
+# Copyright (C) 2025-2026 FastFileLink contributors
+#
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
@@ -21,14 +24,16 @@ import importlib.metadata
 import json
 import os
 import pathlib
-import shutil
 import subprocess
-import sys
+
 from typing import Any, Dict, Optional, Tuple
 
 from install.Backends import (
+    ClaudeCliBackend,
+    ConfigBackend,
     JsonMcpBackend,
     TomlMcpBackend,
+    getClaudeCliPath,
     getDefaultClaudeDesktopConfigPath,
     getDefaultCodexConfigPath,
     getDefaultGrokConfigPath,
@@ -61,6 +66,7 @@ def inferUvxFromSpec() -> Optional[str]:
 
     if not isinstance(url, str) or not url:
         return None
+        
     # file:// URLs are local paths (e.g. bundled wheels) — useless as a uvx source
     if url.startswith("file://"):
         return None
@@ -110,60 +116,12 @@ def buildMcpServerEntry(
     return serverName, entry
 
 
-def getClaudeCliPath() -> Optional[str]:
-    envPath = os.environ.get("CLAUDE_CLI_PATH") or os.environ.get("CLAUDE_BIN")
-    if envPath and pathlib.Path(envPath).exists():
-        return envPath
-
-    whichPath = shutil.which("claude")
-    if whichPath:
-        return whichPath
-
-    homePath = pathlib.Path.home()
-    candidatePaths = [
-        homePath / ".local" / "bin" / "claude",
-        homePath / ".volta" / "bin" / "claude",
-        homePath / ".asdf" / "shims" / "claude",
-        pathlib.Path("/usr/local/bin/claude"),
-        pathlib.Path("/opt/homebrew/bin/claude"),
-        pathlib.Path("/usr/bin/claude"),
-    ]
-    for candidate in candidatePaths:
-        if candidate.exists():
-            return str(candidate)
-
-    nvmRoots = [os.environ.get("NVM_DIR"), str(homePath / ".nvm")]
-    for nvmRoot in nvmRoots:
-        if not nvmRoot:
-            continue
-        nvmPath = pathlib.Path(nvmRoot)
-        if not nvmPath.exists():
-            continue
-        for candidate in nvmPath.glob("versions/node/*/bin/claude"):
-            if candidate.exists():
-                return str(candidate)
-    return None
-
-
 def buildUvxArgs(uvxFrom: Optional[str], entrypoint: str) -> Dict[str, Any]:
     args = ["uvx"]
     if uvxFrom:
         args += ["--from", uvxFrom]
     args.append(entrypoint)
     return {"command": args[0], "args": args[1:]}
-
-
-def runCommand(command: list[str], allowFailure: bool = False) -> None:
-    result = subprocess.run(command, check=False, capture_output=True, text=True, encoding="utf-8", errors="replace")
-    if result.returncode == 0:
-        return
-    if allowFailure:
-        return
-    stderrText = result.stderr.strip()
-    stdoutText = result.stdout.strip()
-    detailParts = [part for part in [stderrText, stdoutText] if part]
-    detail = detailParts[0] if detailParts else "Unknown error"
-    raise RuntimeError(f"Command failed: {' '.join(command)}: {detail}")
 
 
 def warmPyappBinary(binaryPath: Optional[str]) -> None:
@@ -182,31 +140,6 @@ def warmPyappBinary(binaryPath: Optional[str]) -> None:
     except Exception:
         # Best effort only. Registration should still succeed even if warming fails.
         return
-
-
-def installClaudeCliServer(
-    serverName: str,
-    entry: Dict[str, Any],
-    overwrite: bool,
-    scope: str,
-    cliPath: str,
-) -> None:
-    command = [
-        cliPath,
-        "mcp",
-        "add-json",
-        "-s",
-        scope,
-        serverName,
-        json.dumps(entry, ensure_ascii=True),
-    ]
-    if overwrite:
-        runCommand([cliPath, "mcp", "remove", "-s", scope, serverName], allowFailure=True)
-    runCommand(command)
-
-
-def uninstallClaudeCliServer(serverName: str, scope: str, cliPath: str) -> None:
-    runCommand([cliPath, "mcp", "remove", "-s", scope, serverName], allowFailure=True)
 
 
 targetAliases = {
@@ -238,12 +171,21 @@ def buildConfigBackends(
     claudeConfigPath: pathlib.Path,
     codexConfigPath: pathlib.Path,
     grokConfigPath: pathlib.Path,
-) -> Dict[str, Any]:
-    return {
+    cliScope: str,
+) -> Dict[str, ConfigBackend]:
+    backends: Dict[str, ConfigBackend] = {
         "claude-desktop": JsonMcpBackend("claude-desktop", "Claude Desktop", claudeConfigPath),
         "codex": TomlMcpBackend("codex", "Codex", codexConfigPath),
         "grok-build": TomlMcpBackend("grok-build", "Grok Build", grokConfigPath),
     }
+
+    claudeCliPath = getClaudeCliPath()
+    if claudeCliPath:
+        backends["claude-code"] = ClaudeCliBackend(
+            "claude-code", f"Claude Code CLI (scope: {cliScope})", claudeCliPath, cliScope
+        )
+
+    return backends
 
 
 def main() -> None:
@@ -324,27 +266,11 @@ def main() -> None:
 
     installTargetsRaw = [part.strip() for part in args.installTargets.split(",") if part.strip()]
     installTargets = normalizeInstallTargets(installTargetsRaw)
-    configBackends = buildConfigBackends(configPath, codexConfigPath, grokConfigPath)
+    configBackends = buildConfigBackends(configPath, codexConfigPath, grokConfigPath, args.cliScope)
     completedTargets = []
 
-    if "claude-code" in installTargets:
-        claudeCliPath = getClaudeCliPath()
-        if claudeCliPath is None:
-            print("Warning: Claude Code CLI was not found; skipped claude-code.")
-        elif args.uninstall:
-            uninstallClaudeCliServer(args.serverName, args.cliScope, claudeCliPath)
-            print(f"Removed ffl-mcp from Claude Code CLI (scope: {args.cliScope}).")
-            completedTargets.append("claude-code")
-        else:
-            installClaudeCliServer(
-                serverName=args.serverName,
-                entry=entry,
-                overwrite=args.overwrite,
-                scope=args.cliScope,
-                cliPath=claudeCliPath,
-            )
-            print(f"Installed ffl-mcp into Claude Code CLI (scope: {args.cliScope}).")
-            completedTargets.append("claude-code")
+    if "claude-code" in installTargets and "claude-code" not in configBackends:
+        print("Warning: Claude Code CLI was not found; skipped claude-code.")
 
     for target in installTargets:
         backend = configBackends.get(target)

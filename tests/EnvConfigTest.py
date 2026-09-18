@@ -15,7 +15,7 @@
 # limitations under the License.
 """
 Tests for environment variable / config parsing:
-  - ParseFflDebugTest  — FFL_DEBUG path and flag parsing
+  - ParseFFLDebugTest  — FFL_DEBUG path and flag parsing
 """
 
 import os
@@ -29,48 +29,48 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 import MCP
 
 
-class ParseFflDebugTest(unittest.TestCase):
+class ParseFFLDebugTest(unittest.TestCase):
 
     def testDisabledWhenEmpty(self):
         with patch.dict(os.environ, {"FFL_DEBUG": ""}):
-            enabled, path = MCP.parseFflDebug()
+            enabled, path = MCP.parseFFLDebug()
         self.assertFalse(enabled)
         self.assertIsNone(path)
 
     def testDisabledWhenNotSet(self):
         env = {k: v for k, v in os.environ.items() if k != "FFL_DEBUG"}
         with patch.dict(os.environ, env, clear=True):
-            enabled, path = MCP.parseFflDebug()
+            enabled, path = MCP.parseFFLDebug()
         self.assertFalse(enabled)
         self.assertIsNone(path)
 
     def testEnabledWithOne(self):
         with patch.dict(os.environ, {"FFL_DEBUG": "1"}):
-            enabled, path = MCP.parseFflDebug()
+            enabled, path = MCP.parseFFLDebug()
         self.assertTrue(enabled)
         self.assertIsNone(path)
 
     def testEnabledWithTrue(self):
         with patch.dict(os.environ, {"FFL_DEBUG": "true"}):
-            enabled, path = MCP.parseFflDebug()
+            enabled, path = MCP.parseFFLDebug()
         self.assertTrue(enabled)
         self.assertIsNone(path)
 
     def testEnabledWithYes(self):
         with patch.dict(os.environ, {"FFL_DEBUG": "yes"}):
-            enabled, path = MCP.parseFflDebug()
+            enabled, path = MCP.parseFFLDebug()
         self.assertTrue(enabled)
         self.assertIsNone(path)
 
     def testCustomWindowsPath(self):
         with patch.dict(os.environ, {"FFL_DEBUG": r"D:\mcp.log"}):
-            enabled, path = MCP.parseFflDebug()
+            enabled, path = MCP.parseFFLDebug()
         self.assertTrue(enabled)
         self.assertEqual(path, r"D:\mcp.log")
 
     def testCustomUnixPath(self):
         with patch.dict(os.environ, {"FFL_DEBUG": "/tmp/ffl_debug.log"}):
-            enabled, path = MCP.parseFflDebug()
+            enabled, path = MCP.parseFFLDebug()
         self.assertTrue(enabled)
         self.assertEqual(path, "/tmp/ffl_debug.log")
 

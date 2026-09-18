@@ -1151,32 +1151,38 @@ class SingleFileManifestTest(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 class PreviewSidecarPolicyTest(unittest.TestCase):
-    """MCP should only create the internal preview sidecar for folder/multi-file shares."""
+    """
+    MCP should only create the internal preview sidecar (manifest/thumbnail
+    routes) for folder/multi-file shares — but preview=True should append
+    ?preview=true to the link regardless of file count, so ffl's own download
+    page opens straight into its full preview view (see ffl's
+    static/js/PreviewUI.js, which reads this exact query param).
+    """
 
-    def testSingleFileShareDoesNotEnablePreviewSidecarOrPreviewLink(self):
+    def testSingleFileShareDoesNotEnablePreviewSidecarButAppliesPreviewLink(self):
         with tempfile.NamedTemporaryFile(delete=False) as tmp:
             tmp.write(b"hello")
             filePath = tmp.name
         try:
-            with patch.object(MCP, "shareWithFfl", return_value={"link": "https://ffl.example.com/abc"}) as mocked:
+            with patch.object(MCP, "shareWithFFL", return_value={"link": "https://ffl.example.com/abc"}) as mocked:
                 shareFile = getattr(MCP.fflShareFile, "fn", MCP.fflShareFile)
                 result = shareFile(filePath, preview=True)
         finally:
             os.unlink(filePath)
 
-        self.assertEqual(result["link"], "https://ffl.example.com/abc")
+        self.assertEqual(result["link"], "https://ffl.example.com/abc?preview=true")
         self.assertFalse(mocked.call_args.kwargs["enablePreviewSidecar"])
 
-    def testFolderShareEnablesPreviewSidecarAndKeepsCleanLink(self):
+    def testFolderShareEnablesPreviewSidecarAndAppliesPreviewLink(self):
         with tempfile.TemporaryDirectory() as tmpDir:
-            with patch.object(MCP, "shareWithFfl", return_value={"link": "https://ffl.example.com/abc"}) as mocked:
+            with patch.object(MCP, "shareWithFFL", return_value={"link": "https://ffl.example.com/abc"}) as mocked:
                 shareFile = getattr(MCP.fflShareFile, "fn", MCP.fflShareFile)
                 result = shareFile(tmpDir, preview=True)
 
-        self.assertEqual(result["link"], "https://ffl.example.com/abc")
+        self.assertEqual(result["link"], "https://ffl.example.com/abc?preview=true")
         self.assertTrue(mocked.call_args.kwargs["enablePreviewSidecar"])
 
-    def testMultiFileShareEnablesPreviewSidecarAndKeepsCleanLink(self):
+    def testMultiFileShareEnablesPreviewSidecarAndAppliesPreviewLink(self):
         with tempfile.TemporaryDirectory() as tmpDir:
             paths = []
             for name in ("a.txt", "b.txt"):
@@ -1185,12 +1191,25 @@ class PreviewSidecarPolicyTest(unittest.TestCase):
                     f.write(b"x")
                 paths.append(path)
 
-            with patch.object(MCP, "shareWithFfl", return_value={"link": "https://ffl.example.com/abc"}) as mocked:
+            with patch.object(MCP, "shareWithFFL", return_value={"link": "https://ffl.example.com/abc"}) as mocked:
                 shareFiles = getattr(MCP.fflShareFiles, "fn", MCP.fflShareFiles)
                 result = shareFiles(paths, preview=True)
 
-        self.assertEqual(result["link"], "https://ffl.example.com/abc")
+        self.assertEqual(result["link"], "https://ffl.example.com/abc?preview=true")
         self.assertTrue(mocked.call_args.kwargs["enablePreviewSidecar"])
+
+    def testPreviewFalseLeavesLinkUnchanged(self):
+        with tempfile.NamedTemporaryFile(delete=False) as tmp:
+            tmp.write(b"hello")
+            filePath = tmp.name
+        try:
+            with patch.object(MCP, "shareWithFFL", return_value={"link": "https://ffl.example.com/abc"}):
+                shareFile = getattr(MCP.fflShareFile, "fn", MCP.fflShareFile)
+                result = shareFile(filePath, preview=False)
+        finally:
+            os.unlink(filePath)
+
+        self.assertEqual(result["link"], "https://ffl.example.com/abc")
 
 
 if __name__ == "__main__":

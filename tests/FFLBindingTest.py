@@ -35,7 +35,7 @@ class FFLBindingTest(unittest.TestCase):
     def testShareDelegatesToBindingAndCapturesExternalHookEvents(self):
         session = FakeShareSession()
         with patch.object(MCP.ffl, "share", return_value=session) as share:
-            result = MCP.shareWithFfl(
+            result = MCP.shareWithFFL(
                 "file.txt", None, [], None, False, None, None, 1, 30,
                 "http://127.0.0.1:9000/events", None, False,
             )

@@ -27,7 +27,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 sys.path.insert(0, str(Path(__file__).parent))
 
 import MCP
-from IntegrationBase import FflIntegrationBase, callTool, requiresFflBinary, requiresNetwork
+from IntegrationBase import FFLIntegrationBase, callTool, requiresFFLBinary, requiresNetwork
 
 
 class QRExtractionTest(unittest.TestCase):
@@ -88,9 +88,9 @@ class QRExtractionTest(unittest.TestCase):
         self.assertIsNotNone(qrCode)
 
 
-@requiresFflBinary
+@requiresFFLBinary
 @requiresNetwork
-class QRCodeIntegrationTest(FflIntegrationBase):
+class QRCodeIntegrationTest(FFLIntegrationBase):
     """Integration tests for qrInTerminal=True — require tunnel establishment."""
 
     def testShareTextWithQRReturnsQRCode(self):

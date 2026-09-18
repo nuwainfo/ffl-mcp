@@ -1,6 +1,21 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 # SPDX-License-Identifier: Apache-2.0
+#
+# FastFileLink CLI - Fast, no-fuss file sharing
+# Copyright (C) 2025-2026 FastFileLink contributors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
 """Native MCP-client configuration backends.
 
@@ -16,6 +31,9 @@ import json
 import os
 import pathlib
 import re
+import shutil
+import subprocess
+
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple
 
@@ -49,6 +67,59 @@ def getDefaultGrokConfigPath() -> pathlib.Path:
         return pathlib.Path(grokHome).expanduser() / "config.toml"
 
     return pathlib.Path.home() / ".grok" / "config.toml"
+
+
+def getClaudeCliPath() -> Optional[str]:
+    envPath = os.environ.get("CLAUDE_CLI_PATH") or os.environ.get("CLAUDE_BIN")
+    if envPath and pathlib.Path(envPath).exists():
+        return envPath
+
+    whichPath = shutil.which("claude")
+    if whichPath:
+        return whichPath
+
+    homePath = pathlib.Path.home()
+    candidatePaths = [
+        homePath / ".local" / "bin" / "claude",
+        homePath / ".volta" / "bin" / "claude",
+        homePath / ".asdf" / "shims" / "claude",
+        pathlib.Path("/usr/local/bin/claude"),
+        pathlib.Path("/opt/homebrew/bin/claude"),
+        pathlib.Path("/usr/bin/claude"),
+    ]
+    for candidate in candidatePaths:
+        if candidate.exists():
+            return str(candidate)
+
+    nvmRoots = [os.environ.get("NVM_DIR"), str(homePath / ".nvm")]
+    for nvmRoot in nvmRoots:
+        if not nvmRoot:
+            continue
+            
+        nvmPath = pathlib.Path(nvmRoot)
+        if not nvmPath.exists():
+            continue
+            
+        for candidate in nvmPath.glob("versions/node/*/bin/claude"):
+            if candidate.exists():
+                return str(candidate)
+                
+    return None
+
+
+def runCommand(command: list[str], allowFailure: bool = False) -> None:
+    result = subprocess.run(command, check=False, capture_output=True, text=True, encoding="utf-8", errors="replace")
+    if result.returncode == 0:
+        return
+        
+    if allowFailure:
+        return
+        
+    stderrText = result.stderr.strip()
+    stdoutText = result.stdout.strip()
+    detailParts = [part for part in [stderrText, stdoutText] if part]
+    detail = detailParts[0] if detailParts else "Unknown error"
+    raise RuntimeError(f"Command failed: {' '.join(command)}: {detail}")
 
 
 def readJsonFile(path: pathlib.Path) -> Dict[str, Any]:
@@ -238,3 +309,36 @@ class TomlMcpBackend(ConfigBackend):
         backupPath = backupFile(self.configPath)
         writeTextAtomic(self.configPath, updatedText)
         return InstallResult(self.target, self.label, self.configPath, backupPath, changed=True)
+
+
+class ClaudeCliBackend(ConfigBackend):
+    """Claude Code's CLI-based registration (``claude mcp add-json`` / ``remove``).
+
+    Unlike the file-editing backends above, there is no config file for this
+    process to read or write directly — the `claude` CLI owns that. `configPath`
+    holds the CLI executable's own path instead, purely for the install/uninstall
+    summary output; `backupPath` is always None since there is no file to back up.
+    """
+
+    def __init__(self, target: str, label: str, cliPath: str, scope: str):
+        super().__init__(target, label, pathlib.Path(cliPath))
+        self.cliPath = cliPath
+        self.scope = scope
+
+    def install(self, serverName: str, entry: Dict[str, Any], overwrite: bool) -> InstallResult:
+        command = [
+            self.cliPath, "mcp", "add-json", "-s", self.scope, serverName,
+            json.dumps(entry, ensure_ascii=True),
+        ]
+    
+        if overwrite:
+            runCommand([self.cliPath, "mcp", "remove", "-s", self.scope, serverName], allowFailure=True)
+            
+        runCommand(command)
+        
+        return InstallResult(self.target, self.label, self.configPath, None, changed=True)
+
+    def uninstall(self, serverName: str) -> InstallResult:
+        runCommand([self.cliPath, "mcp", "remove", "-s", self.scope, serverName], allowFailure=True)
+        
+        return InstallResult(self.target, self.label, self.configPath, None, changed=True)

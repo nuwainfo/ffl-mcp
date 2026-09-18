@@ -2,6 +2,9 @@
 # -*- coding: utf-8 -*-
 # SPDX-License-Identifier: Apache-2.0
 #
+# FastFileLink CLI - Fast, no-fuss file sharing
+# Copyright (C) 2025-2026 FastFileLink contributors
+#
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
@@ -60,6 +63,7 @@ def isBoxDrawingLine(line: str) -> bool:
     cleanLine = stripAnsiSequences(line).strip()
     if not cleanLine:
         return False
+
     return all(char in boxDrawingChars for char in cleanLine)
 
 
@@ -89,6 +93,7 @@ def extractQrCodeFromOutput(output: str) -> Optional[str]:
     for line in lines[spanStart:spanEnd]:
         if isBoxDrawingLine(line):
             continue
+            
         qrLines.append(line.rstrip("\r"))
 
     if not qrLines:
@@ -107,7 +112,7 @@ fflHookPassword = os.environ.get("FFL_HOOK_PASSWORD")
 fflHookMaxEvents = int(os.environ.get("FFL_HOOK_MAX_EVENTS", "200"))
 
 
-def parseFflDebug() -> Tuple[bool, Optional[str]]:
+def parseFFLDebug() -> Tuple[bool, Optional[str]]:
     """
     Parse FFL_DEBUG environment variable.
     Returns (enabled, path) tuple.
@@ -116,28 +121,35 @@ def parseFflDebug() -> Tuple[bool, Optional[str]]:
     - FFL_DEBUG not set or empty -> (False, None) - disabled
     """
     value = os.environ.get("FFL_DEBUG", "").strip()
+
     if not value:
         return False, None
+
     if value.lower() in ("1", "true", "yes"):
         return True, None
+
     return True, value
 
 
-fflDebugEnabled, fflDebugPath = parseFflDebug()
+fflDebugEnabled, fflDebugPath = parseFFLDebug()
 
 
 def parseBasicAuthHeader(headerValue: Optional[str]) -> Optional[Dict[str, str]]:
     if not headerValue:
         return None
+
     if not headerValue.startswith("Basic "):
         return None
+
     encoded = headerValue[len("Basic "):].strip()
     try:
         decoded = base64.b64decode(encoded).decode("utf-8")
     except (ValueError, UnicodeDecodeError):
         return None
+
     if ":" not in decoded:
         return None
+
     userName, password = decoded.split(":", 1)
     return {"userName": userName, "password": password}
 
@@ -158,6 +170,52 @@ class HookRequestHandler(BaseHTTPRequestHandler):
         self.send_header("WWW-Authenticate", 'Basic realm="ffl-mcp"')
         self.end_headers()
 
+    def _sendError(self, code: int, message: Optional[str] = None) -> None:
+        if message is None:
+            self.send_response(code)
+            self.end_headers()
+            return
+
+        self._sendJson(code, {"error": message})
+
+    def _sendHeaders(self, code: int, contentType: str, contentLength: int) -> None:
+        self.send_response(code)
+        self.send_header("Content-Type", contentType)
+        self.send_header("Content-Length", str(contentLength))
+        self.end_headers()
+
+    def _sendJson(self, code: int, payload: Any) -> None:
+        body = json.dumps(payload).encode("utf-8")
+        self._sendHeaders(code, "application/json; charset=utf-8", len(body))
+        self.wfile.write(body)
+
+    def _sendBytes(self, mimeType: str, data: bytes) -> None:
+        self._sendHeaders(200, mimeType, len(data))
+        self.wfile.write(data)
+
+    def _sendFile(self, filePath: str, mimeType: str, fileHandle) -> None:
+        self._sendHeaders(200, mimeType, os.path.getsize(filePath))
+
+        while True:
+            chunk = fileHandle.read(1024 * 1024)
+            if not chunk:
+                break
+                
+            self.wfile.write(chunk)
+
+    def _resolveHashParam(self, hookServer: "HookServer", args: Dict[str, List[str]]) -> Optional[str]:
+        hashValue = args.get("hash", [None])[0]
+        if not hashValue:
+            self._sendError(400)
+            return None
+
+        filePath = hookServer.resolveFileByHash(hashValue)
+        if not filePath:
+            self._sendError(404)
+            return None
+
+        return filePath
+
     def do_POST(self):
         hookServer = self.server
         if not hookServer.isAuthorized(self.headers.get("Authorization")):
@@ -165,49 +223,35 @@ class HookRequestHandler(BaseHTTPRequestHandler):
             return
 
         if hookServer.path and self.path != hookServer.path:
-            self.send_response(404)
-            self.end_headers()
+            self._sendError(404)
             return
 
         contentLength = int(self.headers.get("Content-Length", "0"))
         if contentLength == 0:
-            self.send_response(400)
-            self.end_headers()
-            self.wfile.write(b'{"error":"empty body"}')
+            self._sendError(400, "empty body")
             return
 
         try:
             requestBody = self.rfile.read(contentLength)
             data = json.loads(requestBody.decode("utf-8"))
         except (json.JSONDecodeError, UnicodeDecodeError) as exc:
-            self.send_response(400)
-            self.end_headers()
-            self.wfile.write(json.dumps({"error": f"invalid json: {exc}"}).encode("utf-8"))
+            self._sendError(400, f"invalid json: {exc}")
             return
 
         eventName = data.get("event")
         eventData = data.get("data", {})
         if not eventName:
-            self.send_response(400)
-            self.end_headers()
-            self.wfile.write(b'{"error":"missing event"}')
+            self._sendError(400, "missing event")
             return
 
         try:
             eventResponse = hookServer.handleEvent(eventName, eventData)
         except Exception as exc:
             logger.warning("Hook handler error: %s", exc)
-            self.send_response(500)
-            self.end_headers()
-            self.wfile.write(json.dumps({"error": f"handler error: {exc}"}).encode("utf-8"))
+            self._sendError(500, f"handler error: {exc}")
             return
 
-        responseBody = json.dumps(eventResponse if eventResponse is not None else {"status": "ok"}).encode("utf-8")
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(responseBody)))
-        self.end_headers()
-        self.wfile.write(responseBody)
+        self._sendJson(200, eventResponse if eventResponse is not None else {"status": "ok"})
 
     def do_GET(self):
         hookServer = self.server
@@ -219,72 +263,32 @@ class HookRequestHandler(BaseHTTPRequestHandler):
         args = parse_qs(parsed.query)
 
         if parsed.path == "/manifest":
-            manifestData = hookServer.getManifestData()
-            body = json.dumps(manifestData).encode("utf-8")
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
+            self._sendJson(200, hookServer.getManifestData())
             return
 
         if parsed.path == "/file":
-            hashValue = args.get("hash", [None])[0]
-            if not hashValue:
-                self.send_response(400)
-                self.end_headers()
-                return
-            filePath = hookServer.resolveFileByHash(hashValue)
+            filePath = self._resolveHashParam(hookServer, args)
             if not filePath:
-                self.send_response(404)
-                self.end_headers()
                 return
+
             mimeType, _ = mimetypes.guess_type(filePath)
-            if not mimeType:
-                mimeType = "application/octet-stream"
             try:
-                fileSize = os.path.getsize(filePath)
-                fileHandle = open(filePath, "rb")
+                with open(filePath, "rb") as fileHandle:
+                    self._sendFile(filePath, mimeType or "application/octet-stream", fileHandle)
             except OSError:
-                self.send_response(404)
-                self.end_headers()
-                return
-            with fileHandle:
-                self.send_response(200)
-                self.send_header("Content-Type", mimeType)
-                self.send_header("Content-Length", str(fileSize))
-                self.end_headers()
-                while True:
-                    chunk = fileHandle.read(1024 * 1024)
-                    if not chunk:
-                        break
-                    self.wfile.write(chunk)
+                self._sendError(404)
             return
 
         if parsed.path == "/thumb":
-            hashValue = args.get("hash", [None])[0]
-            if not hashValue:
-                self.send_response(400)
-                self.end_headers()
-                return
-            filePath = hookServer.resolveFileByHash(hashValue)
+            filePath = self._resolveHashParam(hookServer, args)
             if not filePath:
-                self.send_response(404)
-                self.end_headers()
                 return
-            thumbResult = generateThumbnail(filePath)
-            if not thumbResult:
-                thumbResult = generateDefaultThumbnail()
-            thumbBytes, mimeType = thumbResult
-            self.send_response(200)
-            self.send_header("Content-Type", mimeType)
-            self.send_header("Content-Length", str(len(thumbBytes)))
-            self.end_headers()
-            self.wfile.write(thumbBytes)
+
+            thumbBytes, mimeType = generateThumbnail(filePath) or generateDefaultThumbnail()
+            self._sendBytes(mimeType, thumbBytes)
             return
 
-        self.send_response(404)
-        self.end_headers()
+        self._sendError(404)
 
 
 class HookServer(ThreadingHTTPServer):
@@ -320,14 +324,17 @@ class HookServer(ThreadingHTTPServer):
     def isAuthorized(self, headerValue: Optional[str]) -> bool:
         if not self.username:
             return True
+
         authData = parseBasicAuthHeader(headerValue)
         if not authData:
             return False
+
         return authData["userName"] == self.username and authData["password"] == self.password
 
     def start(self) -> None:
         if self._running:
             raise RuntimeError("Hook server already running")
+
         self._running = True
         self._thread = threading.Thread(target=self.serve_forever, kwargs={"poll_interval": 0.5}, daemon=True)
         self._thread.start()
@@ -335,6 +342,7 @@ class HookServer(ThreadingHTTPServer):
     def stop(self) -> None:
         if not self._running:
             return
+
         self._running = False
         self.shutdown()
         self.server_close()
@@ -361,8 +369,10 @@ class HookServer(ThreadingHTTPServer):
                 with self._eventLock:
                     if isinstance(rawFileSize, (int, float)) and rawFileSize > 0:
                         self._zipSize = int(rawFileSize)
+                        
                     if isinstance(rawFileName, str) and rawFileName:
                         self._registeredFileName = rawFileName
+
             return {
                 "routes": [
                     {
@@ -390,6 +400,7 @@ class HookServer(ThreadingHTTPServer):
         """Convert a Cosmopolitan /C/Users/... path to C:\\Users\\... on Windows."""
         if sys.platform == "win32" and p.startswith("/") and len(p) >= 3 and p[1].isalpha() and p[2] == "/":
             return p[1].upper() + ":\\" + p[3:].replace("/", "\\")
+
         return p
 
     def _storeManifest(self, eventData: Dict[str, Any]) -> None:
@@ -415,10 +426,12 @@ class HookServer(ThreadingHTTPServer):
         for item in manifestItems:
             if item.get("isDir", False):
                 continue
+                
             arcname = item.get("arcname", "")
             mimeType, _ = mimetypes.guess_type(arcname)
             if not mimeType:
                 mimeType = "application/octet-stream"
+                
             previewEntry = {
                 "index": fileIndex,
                 "segmentIndex": item.get("index", 0),
@@ -432,9 +445,11 @@ class HookServer(ThreadingHTTPServer):
             entries.append(previewEntry)
             hashMap[previewEntry["hash"]] = previewEntry
             fileIndex += 1
+
         with self._eventLock:
             if isinstance(linkValue, str):
                 self._linkValue = linkValue
+                
             self._sharedRoot = rawFilePath
             self._arcnameToPath = arcnameToPath
             self._manifestEntries = entries
@@ -447,9 +462,11 @@ class HookServer(ThreadingHTTPServer):
             linkValue = self._linkValue
             zipSize = self._zipSize or 0
             registeredFileName = self._registeredFileName
+
         uid = ""
         if linkValue:
             uid = urlparse(linkValue).path.strip("/").split("/")[0]
+
         if registeredFileName:
             baseName = os.path.basename(registeredFileName)
             zipName = baseName if baseName.lower().endswith(".zip") else baseName + ".zip"
@@ -469,6 +486,7 @@ class HookServer(ThreadingHTTPServer):
             singleMime, _ = mimetypes.guess_type(singleName)
             if not singleMime:
                 singleMime = "application/octet-stream"
+                
             entries = [{
                 "index": 0,
                 "segmentIndex": 0,
@@ -504,18 +522,24 @@ class HookServer(ThreadingHTTPServer):
             sharedRoot = self._sharedRoot
             arcnameToPath = dict(self._arcnameToPath)
             registeredFileName = self._registeredFileName
+
         if not entry:
             if not registeredFileName:
                 return None
+
             registeredHash = hashlib.blake2b(
                 os.path.basename(registeredFileName).encode("utf-8"),
                 digest_size=32
             ).hexdigest()
+            
             if hashValue != registeredHash:
                 return None
+
             if isinstance(sharedRoot, str) and os.path.isfile(sharedRoot):
                 return sharedRoot
+
             return None
+
         arcname = entry["name"]
 
         # Multiple files: arcname is just the filename, look it up in the basename map
@@ -524,19 +548,23 @@ class HookServer(ThreadingHTTPServer):
             nativePath = arcnameToPath.get(basename) or arcnameToPath.get(arcname)
             if nativePath and os.path.isfile(nativePath):
                 return nativePath
+                
             return None
 
         # Single folder: strip folder-name prefix from arcname
         if not sharedRoot or isinstance(sharedRoot, list):
             return None
+
         sharedRootName = os.path.basename(os.path.normpath(sharedRoot))
         if arcname.startswith(sharedRootName + "/"):
             relativeName = arcname[len(sharedRootName) + 1:]
         else:
             relativeName = arcname
         filePath = os.path.join(sharedRoot, relativeName.replace("/", os.sep))
+
         if not os.path.isfile(filePath):
             return None
+
         return filePath
 
     def getLink(self) -> Optional[str]:
@@ -545,6 +573,7 @@ class HookServer(ThreadingHTTPServer):
     def getEvents(self, limit: int) -> List[Dict[str, Any]]:
         if limit <= 0:
             return []
+            
         with self._eventLock:
             return list(self._events[-limit:])
 
@@ -610,18 +639,22 @@ class SessionStore:
     def cleanupSession(self, sessionId: str) -> None:
         with self.lock:
             sessionInfo = self.sessions.pop(sessionId, None)
+
         if not sessionInfo:
             return
+
         try:
             sessionInfo["session"].close()
         except Exception as exc:
             logger.debug("Failed to close session %s: %s", sessionId, exc)
+
         hookServer = sessionInfo.get("hookServer")
         if hookServer:
             try:
                 hookServer.stop()
             except Exception as exc:
                 logger.debug("Failed to stop hook server for %s: %s", sessionId, exc)
+
         for path in sessionInfo.get("tempPaths", []):
             try:
                 os.remove(path)
@@ -633,6 +666,7 @@ class SessionStore:
             endedSessionIds = [
                 sessionId for sessionId, info in self.sessions.items() if not info["session"].running
             ]
+
         for sessionId in endedSessionIds:
             self.cleanupSession(sessionId)
 
@@ -647,6 +681,7 @@ def configureLogging() -> None:
 def getAllowedBaseDir() -> Optional[pathlib.Path]:
     if not allowedBaseDir:
         return None
+
     return pathlib.Path(allowedBaseDir).expanduser().resolve()
 
 
@@ -654,8 +689,33 @@ def isPathAllowed(path: pathlib.Path) -> bool:
     baseDir = getAllowedBaseDir()
     if not baseDir:
         return True
+
     resolvedPath = path.expanduser().resolve()
     return resolvedPath == baseDir or baseDir in resolvedPath.parents
+
+
+def validateSharePath(sharePath: pathlib.Path) -> None:
+    """Shared existence/ALLOWED_BASE_DIR check for fflShareFile and fflShareFiles."""
+    if not sharePath.exists():
+        raise FileNotFoundError(str(sharePath))
+
+    if not isPathAllowed(sharePath):
+        raise PermissionError(f"Path not allowed by ALLOWED_BASE_DIR: {sharePath}")
+
+
+def applyPreviewFlag(result: Dict[str, Any], preview: bool) -> Dict[str, Any]:
+    """
+    When preview=True, append ?preview=true to the returned link so ffl's own
+    download page opens straight into the full preview view (see ffl's
+    static/js/PreviewUI.js, which reads this exact query param) instead of the
+    normal floating card. This is independent of the preview-sidecar mechanism
+    (enablePreviewSidecar), which always runs for folder/multi-file shares
+    regardless of this flag and only provides the manifest/thumbnail data.
+    """
+    if preview and isinstance(result.get("link"), str):
+        result["link"] += "?preview=true"
+        
+    return result
 
 
 def writeDebugLog(prefix: str, stdout: str, stderr: str) -> str:
@@ -681,9 +741,36 @@ def writeDebugLog(prefix: str, stdout: str, stderr: str) -> str:
     return logPath
 
 
+def maybeAttachDebugLog(response: Dict[str, Any], prefix: str, source: Any) -> Dict[str, Any]:
+    """
+    Add debugLogPath to response when FFL_DEBUG is enabled; otherwise leave it
+    untouched. `source` (an ffl-python result/process object) is only read when
+    debug is actually on, so callers can pass a test double that doesn't define
+    stdout/stderr.
+    """
+    if fflDebugEnabled:
+        response["debugLogPath"] = writeDebugLog(prefix, source.stdout, source.stderr)
+        
+    return response
+
+
+def buildFailureResponse(base: Dict[str, Any], exc: Exception, errorPrefix: str, debugPrefix: str) -> Dict[str, Any]:
+    """
+    Shared failure-response shape for fflDownload/fflKeygen. ffl.APEProcessError
+    carries the failed process's captured stdout/stderr (`exc.result`), which is
+    worth surfacing as a debug log; other exceptions don't have that to offer.
+    """
+    response = {**base, "ok": False, "error": f"{errorPrefix}: {exc}"}
+    if isinstance(exc, ffl.APEProcessError):
+        return maybeAttachDebugLog(response, debugPrefix, exc.result)
+        
+    return response
+
+
 def startHookServerIfNeeded(hookUrl: Optional[str], enablePreviewSidecar: bool = False) -> Dict[str, Any]:
     if hookUrl or not fflUseHook:
         return {"hookServer": None, "hookUrl": hookUrl}
+
     if not enablePreviewSidecar:
         return {"hookServer": None, "hookUrl": None}
 
@@ -699,7 +786,7 @@ def startHookServerIfNeeded(hookUrl: Optional[str], enablePreviewSidecar: bool =
     return {"hookServer": hookServer, "hookUrl": hookServer.getHookUrl()}
 
 
-def shareWithFfl(
+def shareWithFFL(
     shareTarget: Union[str, List[str]],
     stdinBytes: Optional[bytes],
     tempPaths: List[str],
@@ -793,17 +880,54 @@ def shareWithFfl(
         "tempPaths": tempPaths,
         "hookServer": hookServer,
     })
+
     result = {
         "sessionId": sessionId,
         "link": session.link,
         "pid": session.pid,
         "cmd": list(session.argv),
     }
+
     if qrInTerminal and isinstance(session.stdout, str):
         qrCode = extractQrCodeFromOutput(session.stdout)
         if qrCode:
             result["qrCode"] = qrCode
+
     return result
+
+
+def buildRecipientKwargs(
+    recipientAuth: Optional[str],
+    pickupCode: Optional[str],
+    recipientPublicKey: Optional[str],
+    recipientEmail: Optional[str],
+    alias: Optional[str],
+    receipt: Optional[str],
+    receiptConfirm: Optional[str],
+    forceRelay: bool,
+    port: Optional[int],
+    invite: bool,
+    enableReporting: bool,
+) -> Dict[str, Any]:
+    """
+    Options shared by every share tool (recipient authentication, delivery
+    receipts, and connection/reporting flags) — the exact keyword set
+    `shareWithFFL()` expects for these, gathered once so the four `fflShare*`
+    tools don't each repeat the same dict literal.
+    """
+    return dict(
+        recipientAuth=recipientAuth,
+        pickupCode=pickupCode,
+        recipientPublicKey=recipientPublicKey,
+        recipientEmail=recipientEmail,
+        alias=alias,
+        receipt=receipt,
+        receiptConfirm=receiptConfirm,
+        forceRelay=forceRelay,
+        port=port,
+        invite=invite,
+        enableReporting=enableReporting,
+    )
 
 
 @mcp.tool
@@ -862,21 +986,12 @@ def fflShareText(
         enableReporting: Enable ffl error reporting for diagnostics (disabled by default)
     """
     textBytes = text.encode("utf-8")
-    kwargs = dict(
-        recipientAuth=recipientAuth,
-        pickupCode=pickupCode,
-        recipientPublicKey=recipientPublicKey,
-        recipientEmail=recipientEmail,
-        alias=alias,
-        receipt=receipt,
-        receiptConfirm=receiptConfirm,
-        forceRelay=forceRelay,
-        port=port,
-        invite=invite,
-        enableReporting=enableReporting,
+    kwargs = buildRecipientKwargs(
+        recipientAuth, pickupCode, recipientPublicKey, recipientEmail, alias,
+        receipt, receiptConfirm, forceRelay, port, invite, enableReporting,
     )
 
-    return shareWithFfl(
+    return shareWithFFL(
         "-", textBytes, [], name, e2ee, authUser, authPassword, maxDownloads, timeoutSeconds,
         hookUrl, proxy, qrInTerminal, **kwargs
     )
@@ -938,21 +1053,12 @@ def fflShareBase64(
         enableReporting: Enable ffl error reporting for diagnostics (disabled by default)
     """
     rawBytes = base64.b64decode(dataB64, validate=True)
-    kwargs = dict(
-        recipientAuth=recipientAuth,
-        pickupCode=pickupCode,
-        recipientPublicKey=recipientPublicKey,
-        recipientEmail=recipientEmail,
-        alias=alias,
-        receipt=receipt,
-        receiptConfirm=receiptConfirm,
-        forceRelay=forceRelay,
-        port=port,
-        invite=invite,
-        enableReporting=enableReporting,
+    kwargs = buildRecipientKwargs(
+        recipientAuth, pickupCode, recipientPublicKey, recipientEmail, alias,
+        receipt, receiptConfirm, forceRelay, port, invite, enableReporting,
     )
 
-    return shareWithFfl(
+    return shareWithFFL(
         "-", rawBytes, [], name, e2ee, authUser, authPassword, maxDownloads, timeoutSeconds,
         hookUrl, proxy, qrInTerminal, **kwargs
     )
@@ -1024,46 +1130,28 @@ def fflShareFile(
         preferredTunnel: Set preferred tunnel for this and future runs — cloudflare, ngrok, bore, etc.
     """
     sharePath = pathlib.Path(path)
-    if not sharePath.exists():
-        raise FileNotFoundError(path)
-    if not isPathAllowed(sharePath):
-        raise PermissionError(f"Path not allowed by ALLOWED_BASE_DIR: {path}")
+    validateSharePath(sharePath)
 
     tempPaths: List[str] = []
-    enablePreviewSidecar = sharePath.is_dir()
-    result = shareWithFfl(
-        str(sharePath),
-        None,
-        tempPaths,
-        name,
-        e2ee,
-        authUser,
-        authPassword,
-        maxDownloads,
-        timeoutSeconds,
-        hookUrl,
-        proxy,
-        qrInTerminal,
+    kwargs = buildRecipientKwargs(
+        recipientAuth, pickupCode, recipientPublicKey, recipientEmail, alias,
+        receipt, receiptConfirm, forceRelay, port, invite, enableReporting,
+    )
+
+    result = shareWithFFL(
+        str(sharePath), None, tempPaths, name, e2ee, authUser, authPassword, maxDownloads, timeoutSeconds,
+        hookUrl, proxy, qrInTerminal,
         exclude=exclude,
-        recipientAuth=recipientAuth,
-        pickupCode=pickupCode,
-        recipientPublicKey=recipientPublicKey,
-        recipientEmail=recipientEmail,
-        alias=alias,
-        receipt=receipt,
-        receiptConfirm=receiptConfirm,
-        forceRelay=forceRelay,
         upload=upload,
         resumeUpload=resumeUpload,
         vfs=vfs,
         preferredTunnel=preferredTunnel,
-        port=port,
-        invite=invite,
         pause=pause,
-        enableReporting=enableReporting,
-        enablePreviewSidecar=enablePreviewSidecar,
+        enablePreviewSidecar=sharePath.is_dir(),
+        **kwargs,
     )
-    return result
+
+    return applyPreviewFlag(result, preview)
 
 
 @mcp.tool
@@ -1133,44 +1221,27 @@ def fflShareFiles(
 
     sharePaths = [pathlib.Path(p) for p in paths]
     for sharePath in sharePaths:
-        if not sharePath.exists():
-            raise FileNotFoundError(str(sharePath))
-        if not isPathAllowed(sharePath):
-            raise PermissionError(f"Path not allowed by ALLOWED_BASE_DIR: {sharePath}")
+        validateSharePath(sharePath)
 
     shareTargets = [str(p) for p in sharePaths]
-    result = shareWithFfl(
-        shareTargets,
-        None,
-        [],
-        name,
-        e2ee,
-        authUser,
-        authPassword,
-        maxDownloads,
-        timeoutSeconds,
-        hookUrl,
-        proxy,
-        qrInTerminal,
+    kwargs = buildRecipientKwargs(
+        recipientAuth, pickupCode, recipientPublicKey, recipientEmail, alias,
+        receipt, receiptConfirm, forceRelay, port, invite, enableReporting,
+    )
+
+    result = shareWithFFL(
+        shareTargets, None, [], name, e2ee, authUser, authPassword, maxDownloads, timeoutSeconds,
+        hookUrl, proxy, qrInTerminal,
         exclude=exclude,
-        recipientAuth=recipientAuth,
-        pickupCode=pickupCode,
-        recipientPublicKey=recipientPublicKey,
-        recipientEmail=recipientEmail,
-        alias=alias,
-        receipt=receipt,
-        receiptConfirm=receiptConfirm,
-        forceRelay=forceRelay,
         upload=upload,
         resumeUpload=resumeUpload,
         preferredTunnel=preferredTunnel,
-        port=port,
-        invite=invite,
         pause=pause,
-        enableReporting=enableReporting,
         enablePreviewSidecar=True,
+        **kwargs,
     )
-    return result
+
+    return applyPreviewFlag(result, preview)
 
 
 @mcp.tool
@@ -1220,26 +1291,19 @@ def fflDownload(
             enable_reporting=enableReporting,
             log_level="DEBUG" if fflDebugEnabled else None,
         )
-    except ffl.APEProcessError as exc:
-        response = {"ok": False, "url": url, "error": f"Download failed: {exc}"}
-        if fflDebugEnabled:
-            response["debugLogPath"] = writeDebugLog("ffl_download_", exc.result.stdout, exc.result.stderr)
-        return response
     except Exception as exc:
-        return {"ok": False, "url": url, "error": f"Download failed: {exc}"}
+        return buildFailureResponse({"url": url}, exc, "Download failed", "ffl_download_")
 
-    transferMode = downloadResult.transfer_mode.name.lower()
     response = {
         "ok": downloadResult.return_code == 0,
         "returncode": downloadResult.return_code,
         "url": url,
-        "transferMode": transferMode,
+        "transferMode": downloadResult.transfer_mode.name.lower(),
     }
     if downloadResult.output_path is not None:
         response["outputPath"] = str(downloadResult.output_path)
-    if fflDebugEnabled:
-        response["debugLogPath"] = writeDebugLog("ffl_download_", downloadResult.stdout, downloadResult.stderr)
-    return response
+
+    return maybeAttachDebugLog(response, "ffl_download_", downloadResult)
 
 
 @mcp.tool
@@ -1268,13 +1332,8 @@ def fflKeygen(
             enable_reporting=False,
             log_level="DEBUG" if fflDebugEnabled else None,
         )
-    except ffl.APEProcessError as exc:
-        response = {"ok": False, "error": f"Key generation failed: {exc}"}
-        if fflDebugEnabled:
-            response["debugLogPath"] = writeDebugLog("ffl_keygen_", exc.result.stdout, exc.result.stderr)
-        return response
     except Exception as exc:
-        return {"ok": False, "error": f"Key generation failed: {exc}"}
+        return buildFailureResponse({}, exc, "Key generation failed", "ffl_keygen_")
 
     response = {
         "ok": keygenResult.return_code == 0,
@@ -1283,9 +1342,8 @@ def fflKeygen(
         "publicKeyPath": str(keygenResult.public_key_path),
         "output": keygenResult.stdout.strip(),
     }
-    if fflDebugEnabled:
-        response["debugLogPath"] = writeDebugLog("ffl_keygen_", keygenResult.stdout, keygenResult.stderr)
-    return response
+
+    return maybeAttachDebugLog(response, "ffl_keygen_", keygenResult)
 
 
 @mcp.tool
@@ -1306,6 +1364,7 @@ def fflGetSession(sessionId: str) -> Dict[str, Any]:
     sessionInfo = sessionStore.getSession(sessionId)
     if not sessionInfo:
         return {"ok": False, "error": "not_found"}
+
     eventCount = len(sessionStore.getSessionEvents(sessionInfo, fflHookMaxEvents))
     return {
         "ok": True,
@@ -1324,6 +1383,7 @@ def fflGetSessionEvents(sessionId: str, limit: int = 50) -> Dict[str, Any]:
     sessionInfo = sessionStore.getSession(sessionId)
     if not sessionInfo:
         return {"ok": False, "error": "not_found"}
+
     events = sessionStore.getSessionEvents(sessionInfo, limit)
     return {"ok": True, "sessionId": sessionId, "events": events}
 
@@ -1346,7 +1406,7 @@ def main() -> None:
     if args.debug:
         os.environ.setdefault("FFL_DEBUG", "1")
         global fflDebugEnabled, fflDebugPath
-        fflDebugEnabled, fflDebugPath = parseFflDebug()
+        fflDebugEnabled, fflDebugPath = parseFFLDebug()
 
     configureLogging()
 

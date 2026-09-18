@@ -165,16 +165,18 @@ uvx --from git+https://github.com/nuwainfo/ffl-mcp ffl-mcp
 
 | Option | Default | Description |
 |---|---|---|
-| `preview` | `False` | Enable preview sidecar routes for folder or multi-file shares. Returned links stay clean; add `?preview=true` manually when you want the browser preview view. |
+| `preview` | `False` | Append `?preview=true` to the returned link, so ffl's download page opens straight into its full preview view instead of the normal floating card. |
 | `exclude` | — | Glob or regex patterns to exclude, comma-separated — e.g. `*.pyc,__pycache__` or `re:\.env$` |
 | `pause` | — | Pause server upload at a percentage from 1 to 99. Requires `upload`. |
 | `vfs` | `False` | Expose as VFS server (`vfs://` URI) — `fflShareFile` only |
 | `preferredTunnel` | — | Set preferred tunnel for this and future runs — `cloudflare`, `ngrok`, `bore`, etc. |
 
-Preview sidecar routes (`/manifest`, `/file`, `/thumb`) are only created for
-folder shares and multi-file shares. Single-file shares are served as direct file
-links, even when `preview=True`. MCP returns the base FastFileLink URL and does
-not append `?preview=true`; users may add that query string manually.
+`preview` only affects the returned link's query string and works for any
+share (single file, folder, or multi-file). The preview *sidecar* routes
+(`/manifest`, `/file`, `/thumb` — the manifest/thumbnail data behind that
+preview page) are a separate, always-on mechanism: MCP starts them
+automatically for folder shares and multi-file shares regardless of `preview`,
+and never for single-file shares.
 
 **Response fields:** `sessionId`, `link`, `pid`, `qrCode?` (ASCII art when `qrInTerminal=True`), `debugLogPath?`
 

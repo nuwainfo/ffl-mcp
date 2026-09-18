@@ -1,6 +1,9 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 # -*- coding: utf-8 -*-
 # SPDX-License-Identifier: Apache-2.0
+#
+# FastFileLink CLI - Fast, no-fuss file sharing
+# Copyright (C) 2025-2026 FastFileLink contributors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,6 +16,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
 """Dispatcher entry point for the ffl-mcp standalone binary.
 
   ffl-mcp.exe            → runs the MCP server (stdio transport)
@@ -26,6 +30,7 @@ decide whether to write a direct binary command or a uvx command.
 
 import os
 import sys
+
 from importlib.metadata import version
 
 # Must be set before fastmcp is imported (Pydantic settings reads env vars at import time).

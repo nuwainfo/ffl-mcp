@@ -33,149 +33,149 @@ class ToolSignatureTest(unittest.TestCase):
 
     # --- fflShareText ---
 
-    def testFflShareTextHasQrInTerminal(self):
+    def testFFLShareTextHasQrInTerminal(self):
         self.assertIn("qrInTerminal", self._params(MCP.fflShareText))
 
-    def testFflShareTextHasRecipientAuth(self):
+    def testFFLShareTextHasRecipientAuth(self):
         self.assertIn("recipientAuth", self._params(MCP.fflShareText))
 
-    def testFflShareTextHasPickupCode(self):
+    def testFFLShareTextHasPickupCode(self):
         self.assertIn("pickupCode", self._params(MCP.fflShareText))
 
-    def testFflShareTextHasRecipientPublicKey(self):
+    def testFFLShareTextHasRecipientPublicKey(self):
         self.assertIn("recipientPublicKey", self._params(MCP.fflShareText))
 
-    def testFflShareTextHasRecipientEmail(self):
+    def testFFLShareTextHasRecipientEmail(self):
         self.assertIn("recipientEmail", self._params(MCP.fflShareText))
 
-    def testFflShareTextHasAlias(self):
+    def testFFLShareTextHasAlias(self):
         self.assertIn("alias", self._params(MCP.fflShareText))
 
-    def testFflShareTextHasReceipt(self):
+    def testFFLShareTextHasReceipt(self):
         self.assertIn("receipt", self._params(MCP.fflShareText))
 
-    def testFflShareTextHasReceiptConfirm(self):
+    def testFFLShareTextHasReceiptConfirm(self):
         self.assertIn("receiptConfirm", self._params(MCP.fflShareText))
 
-    def testFflShareTextHasForceRelay(self):
+    def testFFLShareTextHasForceRelay(self):
         self.assertIn("forceRelay", self._params(MCP.fflShareText))
 
-    def testFflShareTextHasPort(self):
+    def testFFLShareTextHasPort(self):
         self.assertIn("port", self._params(MCP.fflShareText))
 
-    def testFflShareTextHasInvite(self):
+    def testFFLShareTextHasInvite(self):
         self.assertIn("invite", self._params(MCP.fflShareText))
 
-    def testFflShareTextHasEnableReporting(self):
+    def testFFLShareTextHasEnableReporting(self):
         self.assertIn("enableReporting", self._params(MCP.fflShareText))
 
     # --- fflShareBase64 ---
 
-    def testFflShareBase64HasRecipientAuth(self):
+    def testFFLShareBase64HasRecipientAuth(self):
         self.assertIn("recipientAuth", self._params(MCP.fflShareBase64))
 
-    def testFflShareBase64HasForceRelay(self):
+    def testFFLShareBase64HasForceRelay(self):
         self.assertIn("forceRelay", self._params(MCP.fflShareBase64))
 
-    def testFflShareBase64HasPort(self):
+    def testFFLShareBase64HasPort(self):
         self.assertIn("port", self._params(MCP.fflShareBase64))
 
-    def testFflShareBase64HasInvite(self):
+    def testFFLShareBase64HasInvite(self):
         self.assertIn("invite", self._params(MCP.fflShareBase64))
 
-    def testFflShareBase64HasEnableReporting(self):
+    def testFFLShareBase64HasEnableReporting(self):
         self.assertIn("enableReporting", self._params(MCP.fflShareBase64))
 
     # --- fflShareFile ---
 
-    def testFflShareFileHasName(self):
+    def testFFLShareFileHasName(self):
         self.assertIn("name", self._params(MCP.fflShareFile))
 
-    def testFflShareFileHasExclude(self):
+    def testFFLShareFileHasExclude(self):
         self.assertIn("exclude", self._params(MCP.fflShareFile))
 
-    def testFflShareFileHasUpload(self):
+    def testFFLShareFileHasUpload(self):
         self.assertIn("upload", self._params(MCP.fflShareFile))
 
-    def testFflShareFileHasResumeUpload(self):
+    def testFFLShareFileHasResumeUpload(self):
         self.assertIn("resumeUpload", self._params(MCP.fflShareFile))
 
-    def testFflShareFileHasVFS(self):
+    def testFFLShareFileHasVFS(self):
         self.assertIn("vfs", self._params(MCP.fflShareFile))
 
-    def testFflShareFileHasPreferredTunnel(self):
+    def testFFLShareFileHasPreferredTunnel(self):
         self.assertIn("preferredTunnel", self._params(MCP.fflShareFile))
 
-    def testFflShareFileHasRecipientAuth(self):
+    def testFFLShareFileHasRecipientAuth(self):
         self.assertIn("recipientAuth", self._params(MCP.fflShareFile))
 
-    def testFflShareFileHasPort(self):
+    def testFFLShareFileHasPort(self):
         self.assertIn("port", self._params(MCP.fflShareFile))
 
-    def testFflShareFileHasInvite(self):
+    def testFFLShareFileHasInvite(self):
         self.assertIn("invite", self._params(MCP.fflShareFile))
 
-    def testFflShareFileHasPause(self):
+    def testFFLShareFileHasPause(self):
         self.assertIn("pause", self._params(MCP.fflShareFile))
 
-    def testFflShareFileHasEnableReporting(self):
+    def testFFLShareFileHasEnableReporting(self):
         self.assertIn("enableReporting", self._params(MCP.fflShareFile))
 
     # --- fflDownload ---
 
-    def testFflDownloadHasRecipientAuth(self):
+    def testFFLDownloadHasRecipientAuth(self):
         self.assertIn("recipientAuth", self._params(MCP.fflDownload))
 
-    def testFflDownloadHasPickupCode(self):
+    def testFFLDownloadHasPickupCode(self):
         self.assertIn("pickupCode", self._params(MCP.fflDownload))
 
-    def testFflDownloadHasRecipientPrivateKey(self):
+    def testFFLDownloadHasRecipientPrivateKey(self):
         self.assertIn("recipientPrivateKey", self._params(MCP.fflDownload))
 
-    def testFflDownloadHasEnableReporting(self):
+    def testFFLDownloadHasEnableReporting(self):
         self.assertIn("enableReporting", self._params(MCP.fflDownload))
 
     # --- fflShareFiles ---
 
-    def testFflShareFilesExists(self):
+    def testFFLShareFilesExists(self):
         self.assertTrue(hasattr(MCP, "fflShareFiles"))
 
-    def testFflShareFilesHasPathsParam(self):
+    def testFFLShareFilesHasPathsParam(self):
         self.assertIn("paths", self._params(MCP.fflShareFiles))
 
-    def testFflShareFilesHasName(self):
+    def testFFLShareFilesHasName(self):
         self.assertIn("name", self._params(MCP.fflShareFiles))
 
-    def testFflShareFilesHasE2EE(self):
+    def testFFLShareFilesHasE2EE(self):
         self.assertIn("e2ee", self._params(MCP.fflShareFiles))
 
-    def testFflShareFilesHasUpload(self):
+    def testFFLShareFilesHasUpload(self):
         self.assertIn("upload", self._params(MCP.fflShareFiles))
 
-    def testFflShareFilesHasRecipientAuth(self):
+    def testFFLShareFilesHasRecipientAuth(self):
         self.assertIn("recipientAuth", self._params(MCP.fflShareFiles))
 
-    def testFflShareFilesHasExclude(self):
+    def testFFLShareFilesHasExclude(self):
         self.assertIn("exclude", self._params(MCP.fflShareFiles))
 
-    def testFflShareFilesHasPort(self):
+    def testFFLShareFilesHasPort(self):
         self.assertIn("port", self._params(MCP.fflShareFiles))
 
-    def testFflShareFilesHasInvite(self):
+    def testFFLShareFilesHasInvite(self):
         self.assertIn("invite", self._params(MCP.fflShareFiles))
 
-    def testFflShareFilesHasPause(self):
+    def testFFLShareFilesHasPause(self):
         self.assertIn("pause", self._params(MCP.fflShareFiles))
 
-    def testFflShareFilesHasEnableReporting(self):
+    def testFFLShareFilesHasEnableReporting(self):
         self.assertIn("enableReporting", self._params(MCP.fflShareFiles))
 
     # --- fflKeygen ---
 
-    def testFflKeygenExists(self):
+    def testFFLKeygenExists(self):
         self.assertTrue(hasattr(MCP, "fflKeygen"))
 
-    def testFflKeygenHasNameParam(self):
+    def testFFLKeygenHasNameParam(self):
         self.assertIn("name", self._params(MCP.fflKeygen))
 
 

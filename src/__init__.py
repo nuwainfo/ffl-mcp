@@ -1,1 +1,0 @@
-"""ffl-mcp package."""

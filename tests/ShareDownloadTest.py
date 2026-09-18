@@ -28,12 +28,12 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 sys.path.insert(0, str(Path(__file__).parent))
 
 import MCP
-from IntegrationBase import FflIntegrationBase, callTool, requiresFflBinary, requiresNetwork
+from IntegrationBase import FFLIntegrationBase, callTool, requiresFFLBinary, requiresNetwork
 
 
-@requiresFflBinary
+@requiresFFLBinary
 @requiresNetwork
-class ShareTextTest(FflIntegrationBase):
+class ShareTextTest(FFLIntegrationBase):
 
     def testShareTextReturnsHttpLink(self):
         result = callTool(MCP.fflShareText,
@@ -94,9 +94,9 @@ class ShareTextTest(FflIntegrationBase):
         self.assertTrue(result["link"].startswith("http"))
 
 
-@requiresFflBinary
+@requiresFFLBinary
 @requiresNetwork
-class ShareFilesTest(FflIntegrationBase):
+class ShareFilesTest(FFLIntegrationBase):
 
     def testShareMultipleFilesReturnsLink(self):
         pathA = self._makeTempPath(suffix=".txt")
@@ -131,9 +131,9 @@ class ShareFilesTest(FflIntegrationBase):
         self.assertIn("link", result)
 
 
-@requiresFflBinary
+@requiresFFLBinary
 @requiresNetwork
-class ShareAndDownloadTest(FflIntegrationBase):
+class ShareAndDownloadTest(FFLIntegrationBase):
 
     def testShareAndDownloadTextContent(self):
         testContent = b"Integration test content for download verification."

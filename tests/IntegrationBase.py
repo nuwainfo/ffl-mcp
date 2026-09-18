@@ -17,7 +17,7 @@
 Shared base class and skip markers for integration tests that need the ffl binary.
 
 Import this in each integration test file:
-    from IntegrationBase import FflIntegrationBase, requiresFflBinary, requiresNetwork
+    from IntegrationBase import FFLIntegrationBase, requiresFFLBinary, requiresNetwork
 """
 
 import logging
@@ -50,14 +50,14 @@ def _fflBinaryAvailable() -> bool:
         return False
 
 
-requiresFflBinary = unittest.skipUnless(_fflBinaryAvailable(), "ffl binary not available or not executable")
+requiresFFLBinary = unittest.skipUnless(_fflBinaryAvailable(), "ffl binary not available or not executable")
 requiresNetwork = unittest.skipUnless(
     os.environ.get("FFL_INTEGRATION_TESTS") == "1",
     "Set FFL_INTEGRATION_TESTS=1 to run network-dependent tests",
 )
 
 
-class FflIntegrationBase(unittest.TestCase):
+class FFLIntegrationBase(unittest.TestCase):
     """
     Base class for integration tests.
 
