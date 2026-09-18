@@ -1,6 +1,6 @@
 ; ffl-mcp Windows installer - NSIS MUI2
-; Build via:  python build.py  (or --installer-only)
-; The following defines are injected by build.py at compile time via /D flags:
+; Build via:  python scripts/Build.py  (or --installer-only)
+; The following defines are injected by scripts/Build.py at compile time via /D flags:
 ;   APP_VERSION          e.g. 0.1.5
 ;   EXE_PATH             absolute path to dist\ffl-mcp.exe
 ;   INSTALL_SCRIPT_PATH  absolute path to build-cache\install-mcp.ps1

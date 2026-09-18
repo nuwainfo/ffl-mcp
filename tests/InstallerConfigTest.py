@@ -17,10 +17,13 @@
 
 import os
 import pathlib
+import sys
 import tempfile
 import unittest
 
-from build import generateInstallScript, generateUninstallScript
+sys.path.insert(0, str(pathlib.Path(__file__).parent.parent / "scripts"))
+
+from Build import generateInstallScript, generateUninstallScript
 from install.Backends import (
     TomlMcpBackend,
     buildTomlServerConfig,
@@ -129,7 +132,7 @@ command = "node"
 
     def testLocalBindingBuildUsesTheSupportedFastMcpVersion(self):
         repoRoot = pathlib.Path(__file__).resolve().parents[1]
-        buildText = (repoRoot / "build.py").read_text(encoding="utf-8")
+        buildText = (repoRoot / "scripts" / "Build.py").read_text(encoding="utf-8")
         self.assertIn("FAST_MCP_REQUIREMENT", buildText)
         self.assertNotIn('"fastmcp>=2,<3"', buildText)
 
