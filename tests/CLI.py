@@ -45,7 +45,6 @@ def parseArgs() -> argparse.Namespace:
     parser.add_argument("--no-preview", action="store_true", help="Disable folder/multi-file preview mode.")
     parser.add_argument("--max-downloads", type=int, default=0, help="Max downloads for P2P mode. Default: 0.")
     parser.add_argument("--timeout-seconds", type=int, default=1800, help="Inactivity timeout. Default: 1800.")
-    parser.add_argument("--wait-link-seconds", type=int, default=30, help="Wait for link generation. Default: 30.")
     parser.add_argument(
         "--hold-seconds",
         type=int,
@@ -116,7 +115,6 @@ async def run(args: argparse.Namespace) -> int:
                 "preview": not args.no_preview,
                 "maxDownloads": args.max_downloads,
                 "timeoutSeconds": args.timeout_seconds,
-                "waitLinkSeconds": args.wait_link_seconds,
                 "e2ee": args.e2ee,
                 "forceRelay": args.force_relay,
             }

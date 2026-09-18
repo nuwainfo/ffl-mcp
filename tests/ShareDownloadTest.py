@@ -169,7 +169,7 @@ class ShareAndDownloadTest(FflIntegrationBase):
         self.assertIn("transferMode", downloadResult)
         self.assertIn(
             downloadResult["transferMode"],
-            ("webrtc_p2p", "http_fallback", "http_direct", "unknown"),
+            ("webrtc_p2p", "http_fallback", "http_direct", "p2p_tcp", "p2p_quic", "unknown"),
         )
 
     def testDownloadReportsOutputPath(self):

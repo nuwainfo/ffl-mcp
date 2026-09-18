@@ -191,8 +191,9 @@ Downloads from FastFileLink URLs (WebRTC P2P when possible, HTTP fallback) or an
 
 | `transferMode` | Meaning |
 |---|---|
-| `webrtc_p2p` | Direct peer-to-peer (fastest) |
-| `http_fallback` | HTTP relay when WebRTC fails |
+| `webrtc_p2p` | Direct peer-to-peer over WebRTC (fastest) |
+| `p2p_tcp` / `p2p_quic` | Direct peer-to-peer over raw TCP/QUIC |
+| `http_fallback` | HTTP relay when P2P fails |
 | `http_direct` | Regular HTTP download (non-FastFileLink URL) |
 
 For authenticated links: pass `recipientAuth` + `pickupCode` (pickup mode) or `recipientPrivateKey` (pubkey mode).

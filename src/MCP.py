@@ -23,10 +23,7 @@ import logging
 import mimetypes
 import os
 import pathlib
-import platform
 import re
-import shlex
-import subprocess
 import sys
 import tempfile
 import threading
@@ -48,55 +45,6 @@ mcp = FastMCP("ffl-mcp")
 ansiEscapePattern = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 qrBlockChars = ("█", "▀", "▄")
 boxDrawingChars = set("─│┌┐└┘├┤┬┴┼═║╔╗╚╝╠╣╦╩╬")
-
-
-def isRunningInWSL() -> bool:
-    """Check if running in WSL (Windows Subsystem for Linux)"""
-    try:
-        with open("/proc/version", "r") as f:
-            version = f.read().lower()
-            return "microsoft" in version or "wsl" in version
-    except Exception:
-        return False
-
-
-def checkWSLInteropIssue() -> Optional[str]:
-    """
-    Check if WSLInterop is causing issues with .com files.
-    Returns error message with instructions if fix is needed, None otherwise.
-    """
-    if not isRunningInWSL():
-        return None
-
-    # Check if running in WSL2 - provide fix instructions
-    # Even if WSLInterop doesn't exist, the interop mechanism may still cause issues
-    wslInteropPath = pathlib.Path("/proc/sys/fs/binfmt_misc/WSLInterop")
-
-    if wslInteropPath.exists():
-        try:
-            with open(wslInteropPath, "r") as f:
-                content = f.read()
-                if "enabled" in content.lower():
-                    return (
-                        "WSL2 WSLInterop is interfering with ffl.com execution.\n\n"
-                        "To fix this, run the following command in your WSL terminal:\n\n"
-                        "    sudo sh -c 'echo -1 > /proc/sys/fs/binfmt_misc/WSLInterop'\n\n"
-                        "This disables Windows interop for .com files, allowing ffl.com to run natively as an APE binary.\n"
-                        "You may need to restart your WSL session after running this command."
-                    )
-        except Exception:
-            pass
-
-    # WSLInterop file doesn't exist or is already disabled
-    # But we're still in WSL2, so provide general guidance
-    return (
-        "ffl.com execution failed in WSL2.\n\n"
-        "This may be due to Windows interop interference with .com files.\n"
-        "Try running this command to disable Windows interop for .com files:\n\n"
-        "    sudo sh -c 'echo -1 > /proc/sys/fs/binfmt_misc/WSLInterop'\n\n"
-        "If WSLInterop doesn't exist, try restarting your WSL session.\n"
-        "Alternatively, use FFL_RUN_MODE=python with FFL_CORE_PATH pointing to the ffl Core.py file."
-    )
 
 
 def stripAnsiSequences(text: str) -> str:
@@ -149,38 +97,8 @@ def extractQrCodeFromOutput(output: str) -> Optional[str]:
     return "\n".join(qrLines)
 
 
-def resolveDefaultFflBin() -> str:
-    localFfl = pathlib.Path(__file__).resolve().parent / "ffl.com"
-    if localFfl.exists():
-        if not os.access(localFfl, os.X_OK):
-            os.chmod(localFfl, 0o755)
-        return str(localFfl)
-    return "ffl"
-
-
-# Python env vars that PyApp sets (pointing to its venv) which confuse ffl.com's
-# embedded Cosmopolitan Python runtime, causing it to look for static files in the
-# wrong location instead of its own /zip/ embedded filesystem.
-_PYAPP_LEAKED_VARS = ("PYTHONHOME", "PYTHONPATH", "PYTHONSTARTUP", "PYTHONDONTWRITEBYTECODE", "PYAPP")
-
-
-def buildFflEnv() -> Dict[str, str]:
-    """Return an environment for spawning ffl.com with PyApp-leaked Python vars removed."""
-    env = os.environ.copy()
-    for var in _PYAPP_LEAKED_VARS:
-        env.pop(var, None)
-    return env
-
-
-defaultWaitLinkSeconds = int(os.environ.get("FFL_WAIT_LINK_SECONDS", "20"))
 allowedBaseDir = os.environ.get("ALLOWED_BASE_DIR")
-fflRunMode = os.environ.get("FFL_RUN_MODE", "binary").lower()
-fflBin = os.environ.get("FFL_BIN", resolveDefaultFflBin())
-fflPython = os.environ.get("FFL_PYTHON", "python")
-fflCorePath = os.environ.get("FFL_CORE_PATH")
-fflCommandOverride = os.environ.get("FFL_COMMAND")
 fflUseStdin = os.environ.get("FFL_USE_STDIN", "").lower() in ("1", "true", "yes")
-fflShellMode = os.environ.get("FFL_SHELL", "").lower() in ("1", "true", "yes")
 fflUseHook = os.environ.get("FFL_USE_HOOK", "1").lower() in ("1", "true", "yes")
 fflHookHost = os.environ.get("FFL_HOOK_HOST", "127.0.0.1")
 fflHookPath = os.environ.get("FFL_HOOK_PATH", "/events")
@@ -740,196 +658,27 @@ def isPathAllowed(path: pathlib.Path) -> bool:
     return resolvedPath == baseDir or baseDir in resolvedPath.parents
 
 
-def readJsonLink(jsonPath: str) -> Optional[str]:
-    try:
-        with open(jsonPath, "r", encoding="utf-8") as handle:
-            data = json.load(handle)
-    except json.JSONDecodeError as exc:
-        logger.debug("JSON not ready yet at %s: %s", jsonPath, exc)
-        return None
-    link = data.get("link")
-    if isinstance(link, str) and link.startswith("http"):
-        return link
-    return None
-
-
-def waitForLink(jsonPath: str, waitSeconds: int, hookServer: Optional[HookServer]) -> str:
-    deadline = time.time() + max(1, waitSeconds)
-    while time.time() < deadline:
-        if hookServer:
-            linkValue = hookServer.getLink()
-            if linkValue:
-                return linkValue
-        if os.path.exists(jsonPath):
-            link = readJsonLink(jsonPath)
-            if link:
-                return link
-        time.sleep(0.15)
-
-    # Timeout occurred - provide helpful error message
-    errorMsg = f"ffl did not produce a link within {waitSeconds}s."
-
-    # Check for WSL interop issue
-    wslInteropMsg = checkWSLInteropIssue()
-    if wslInteropMsg:
-        errorMsg += f"\n\n{wslInteropMsg}"
-    else:
-        errorMsg += "\n\nCheck your FFL_BIN/FFL_CORE_PATH configuration."
-
-    # Add debug log hint if available
-    if fflDebugEnabled:
-        errorMsg += "\n\nCheck the debug log (debugLogPath in response) for detailed error information."
-
-    raise RuntimeError(errorMsg)
-
-
-def createTempFile(fileName: str, data: bytes) -> str:
-    suffix = pathlib.Path(fileName).suffix
-    tempFile = tempfile.NamedTemporaryFile(prefix="ffl_", suffix=suffix, delete=False)
-    tempFile.write(data)
-    tempFile.close()
-    return tempFile.name
-
-
-def setupDebugLogging(
-    tempPaths: Optional[List[str]] = None,
-    prefix: str = "ffl_debug_",
-    customPath: Optional[str] = None
-) -> Tuple[Any, str]:
+def writeDebugLog(prefix: str, stdout: str, stderr: str) -> str:
     """
-    Create a file for debug logging and open it for writing.
-    If customPath is provided, uses that path instead of creating a temp file.
-    Returns (logFile, logPath) tuple.
-    Adds the log path to tempPaths for cleanup if tempPaths is provided and customPath is None.
+    Write captured ffl stdout/stderr to fflDebugPath, or a new temp file when unset.
+    Used when FFL_DEBUG is enabled to surface the ffl-python binding's captured
+    output (log_level=DEBUG) for troubleshooting.
     """
-    if customPath:
-        logPath = customPath
-        # Create parent directory if needed
+    if fflDebugPath:
+        logPath = fflDebugPath
         pathlib.Path(logPath).parent.mkdir(parents=True, exist_ok=True)
-        logFile = open(logPath, "w")
-        logger.info("FFL_DEBUG=%s: Logging ffl output to %s", customPath, logPath)
     else:
         logTemp = tempfile.NamedTemporaryFile(prefix=prefix, suffix=".log", delete=False, mode="w")
         logPath = logTemp.name
         logTemp.close()
-        if tempPaths is not None:
-            tempPaths.append(logPath)
-        logFile = open(logPath, "w")
-        logger.info("FFL_DEBUG=1: Logging ffl output to %s", logPath)
-    return logFile, logPath
 
+    with open(logPath, "w", encoding="utf-8") as handle:
+        handle.write(stdout)
+        if stderr:
+            handle.write("\n--- stderr ---\n")
+            handle.write(stderr)
 
-def buildBaseCommand() -> List[str]:
-    if fflCommandOverride:
-        return shlex.split(fflCommandOverride)
-    if fflRunMode == "python":
-        if not fflCorePath:
-            raise ValueError("FFL_CORE_PATH is required when FFL_RUN_MODE=python")
-        return [fflPython, fflCorePath, "--cli"]
-    return [fflBin]
-
-
-def shouldUseShell(command: List[str]) -> bool:
-    if fflShellMode:
-        return True
-    if not command:
-        return False
-
-    # On Windows, APE binaries (.com files) work fine without shell mode
-    # and using shell mode causes quoting issues with paths
-    if platform.system() == "Windows":
-        return False
-
-    return command[0].endswith(".com")
-
-
-def buildShareArgs(
-    shareTarget: Union[str, List[str]],
-    name: Optional[str],
-    e2ee: bool,
-    authUser: Optional[str],
-    authPassword: Optional[str],
-    maxDownloads: int,
-    timeoutSeconds: int,
-    hookUrl: Optional[str],
-    proxy: Optional[str],
-    exclude: Optional[str] = None,
-    recipientAuth: Optional[str] = None,
-    pickupCode: Optional[str] = None,
-    recipientPublicKey: Optional[str] = None,
-    recipientEmail: Optional[str] = None,
-    alias: Optional[str] = None,
-    receipt: Optional[str] = None,
-    receiptConfirm: Optional[str] = None,
-    forceRelay: bool = False,
-    upload: Optional[str] = None,
-    resumeUpload: bool = False,
-    vfs: bool = False,
-    preferredTunnel: Optional[str] = None,
-    port: Optional[int] = None,
-    invite: bool = False,
-    pause: Optional[int] = None,
-    enableReporting: bool = False,
-) -> List[str]:
-    args = list(shareTarget) if isinstance(shareTarget, list) else [shareTarget]
-    # --max-downloads and --timeout are P2P-only; skip them when uploading to server
-    if not upload:
-        args += ["--max-downloads", str(maxDownloads), "--timeout", str(timeoutSeconds)]
-    if name:
-        args += ["--name", name]
-    if e2ee:
-        args.append("--e2ee")
-    if upload:
-        args += ["--upload", upload]
-    if resumeUpload:
-        args.append("--resume")
-    if pause is not None:
-        args += ["--pause", str(pause)]
-    if exclude:
-        args += ["--exclude", exclude]
-    if authUser:
-        args += ["--auth-user", authUser]
-    if authPassword:
-        args += ["--auth-password", authPassword]
-    if recipientAuth:
-        args += ["--recipient-auth", recipientAuth]
-    if pickupCode:
-        args += ["--pickup-code", pickupCode]
-    if recipientPublicKey:
-        args += ["--recipient-public-key", recipientPublicKey]
-    if recipientEmail:
-        args += ["--recipient-email", recipientEmail]
-    if alias:
-        args += ["--alias", alias]
-    if receipt is not None:
-        if receipt:
-            args += ["--receipt", receipt]
-        else:
-            args.append("--receipt")
-    if receiptConfirm is not None:
-        if receiptConfirm:
-            args += ["--receipt-confirm", receiptConfirm]
-        else:
-            args.append("--receipt-confirm")
-    if forceRelay:
-        args.append("--force-relay")
-    if vfs:
-        args.append("--vfs")
-    if preferredTunnel:
-        args += ["--preferred-tunnel", preferredTunnel]
-    if port is not None:
-        args += ["--port", str(port)]
-    if invite:
-        args.append("--invite")
-    if hookUrl:
-        args += ["--hook", hookUrl]
-    if proxy:
-        args += ["--proxy", proxy]
-    if enableReporting:
-        args.append("--enable-reporting")
-    if fflDebugEnabled:
-        args += ["--log-level", "DEBUG"]
-    return args
+    return logPath
 
 
 def startHookServerIfNeeded(hookUrl: Optional[str], enablePreviewSidecar: bool = False) -> Dict[str, Any]:
@@ -960,7 +709,6 @@ def shareWithFfl(
     authPassword: Optional[str],
     maxDownloads: int,
     timeoutSeconds: int,
-    waitLinkSeconds: int,
     hookUrl: Optional[str],
     proxy: Optional[str],
     qrInTerminal: bool,
@@ -987,7 +735,6 @@ def shareWithFfl(
     Common sharing logic for all share functions.
     Handles hook server initialization, argument building, and process spawning.
     """
-    del waitLinkSeconds
     hookInfo = startHookServerIfNeeded(hookUrl, enablePreviewSidecar=enablePreviewSidecar)
     hookServer = hookInfo["hookServer"]
     effectiveHookUrl = hookInfo["hookUrl"]
@@ -1022,6 +769,7 @@ def shareWithFfl(
             pause=pause,
             enable_reporting=enableReporting,
             qr=True if qrInTerminal else None,
+            log_level="DEBUG" if fflDebugEnabled else None,
         )
         if stdinBytes is None:
             session = ffl.share(shareTarget, **shareOptions)
@@ -1058,125 +806,6 @@ def shareWithFfl(
     return result
 
 
-def spawnFflAndWaitLink(
-    fflArgs: List[str],
-    stdinBytes: Optional[bytes],
-    waitSeconds: int,
-    tempPaths: Optional[List[str]] = None,
-    hookServer: Optional[HookServer] = None,
-    qrPath: Optional[str] = None,
-    qrInTerminal: bool = False,
-) -> Dict[str, Any]:
-    tempPaths = tempPaths or []
-    jsonTemp = tempfile.NamedTemporaryFile(prefix="ffl_", suffix=".json", delete=False)
-    jsonPath = jsonTemp.name
-    jsonTemp.close()
-    tempPaths.append(jsonPath)
-
-    command = buildBaseCommand() + fflArgs + ["--json", jsonPath]
-
-    # Add QR code options
-    if qrPath:
-        command += ["--qr", qrPath]
-    elif qrInTerminal:
-        command += ["--qr"]
-
-    useShell = shouldUseShell(command)
-
-    logger.info("Starting ffl: %s", shlex.join(command))
-
-    # Setup output capture (for debug or QR code)
-    logFile = None
-    logPath = None
-    if fflDebugEnabled or qrInTerminal:
-        logFile, logPath = setupDebugLogging(tempPaths if not fflDebugPath else None, "ffl_output_", fflDebugPath)
-
-    fflEnv = buildFflEnv()
-    commandArg = shlex.join(command) if useShell else command
-    process = subprocess.Popen(
-        commandArg,
-        shell=useShell,
-        stdin=subprocess.PIPE if stdinBytes is not None else None,
-        stdout=logFile if logFile else subprocess.DEVNULL,
-        stderr=logFile if logFile else subprocess.DEVNULL,
-        cwd=os.path.dirname(__file__),
-        env=fflEnv,
-    )
-
-    if stdinBytes is not None and process.stdin is not None:
-        process.stdin.write(stdinBytes)
-        process.stdin.close()
-
-    try:
-        link = waitForLink(jsonPath, waitSeconds, hookServer)
-    except Exception:
-        try:
-            process.terminate()
-            process.wait(timeout=3)
-        except Exception as exc:
-            logger.debug("Failed to terminate ffl process: %s", exc)
-        finally:
-            if process.poll() is None:
-                try:
-                    process.kill()
-                except Exception as exc:
-                    logger.debug("Failed to kill ffl process: %s", exc)
-        if logFile:
-            try:
-                logFile.close()
-            except Exception as exc:
-                logger.debug("Failed to close log file: %s", exc)
-        if hookServer:
-            try:
-                hookServer.stop()
-            except Exception as exc:
-                logger.debug("Failed to stop hook server: %s", exc)
-        for path in tempPaths:
-            # Keep debug log files for troubleshooting
-            if fflDebugEnabled and path.endswith(".log"):
-                logger.info("Debug log preserved at: %s", path)
-                continue
-            try:
-                os.remove(path)
-            except Exception as exc:
-                logger.debug("Failed to remove temp file %s: %s", path, exc)
-        raise
-
-    sessionId = str(uuid.uuid4())
-    sessionStore.addSession({
-        "sessionId": sessionId,
-        "process": process,
-        "link": link,
-        "startedAt": time.time(),
-        "jsonPath": jsonPath,
-        "command": command,
-        "tempPaths": tempPaths,
-        "hookServer": hookServer,
-    })
-
-    result = {"sessionId": sessionId, "link": link, "pid": process.pid, "jsonPath": jsonPath, "cmd": command}
-
-    # Handle QR code in terminal mode
-    if qrInTerminal and logPath and os.path.exists(logPath):
-        try:
-            with open(logPath, "r") as f:
-                output = f.read()
-                qrCode = extractQrCodeFromOutput(output)
-                if qrCode:
-                    result["qrCode"] = qrCode
-        except Exception as exc:
-            logger.debug("Failed to extract QR code from output: %s", exc)
-
-    # Keep QR code PNG path if generated
-    if qrPath and os.path.exists(qrPath):
-        result["qrCodePath"] = qrPath
-
-    if logPath and fflDebugEnabled:
-        result["debugLogPath"] = logPath
-
-    return result
-
-
 @mcp.tool
 def fflShareText(
     text: str,
@@ -1186,7 +815,6 @@ def fflShareText(
     authPassword: Optional[str] = None,
     maxDownloads: int = 1,
     timeoutSeconds: int = 1800,
-    waitLinkSeconds: int = defaultWaitLinkSeconds,
     hookUrl: Optional[str] = None,
     proxy: Optional[str] = None,
     qrInTerminal: bool = False,
@@ -1218,7 +846,6 @@ def fflShareText(
         authPassword: HTTP Basic Auth password to protect the link
         maxDownloads: Stop serving after N downloads (default: 1)
         timeoutSeconds: Stop serving after N seconds of inactivity (default: 1800)
-        waitLinkSeconds: Seconds to wait for link generation
         hookUrl: Custom webhook URL for events
         proxy: Proxy server URL (e.g. socks5://127.0.0.1:9050)
         qrInTerminal: Return ASCII QR code art for terminal display
@@ -1250,7 +877,7 @@ def fflShareText(
     )
 
     return shareWithFfl(
-        "-", textBytes, [], name, e2ee, authUser, authPassword, maxDownloads, timeoutSeconds, waitLinkSeconds,
+        "-", textBytes, [], name, e2ee, authUser, authPassword, maxDownloads, timeoutSeconds,
         hookUrl, proxy, qrInTerminal, **kwargs
     )
 
@@ -1264,7 +891,6 @@ def fflShareBase64(
     authPassword: Optional[str] = None,
     maxDownloads: int = 1,
     timeoutSeconds: int = 1800,
-    waitLinkSeconds: int = defaultWaitLinkSeconds,
     hookUrl: Optional[str] = None,
     proxy: Optional[str] = None,
     qrInTerminal: bool = False,
@@ -1296,7 +922,6 @@ def fflShareBase64(
         authPassword: HTTP Basic Auth password to protect the link
         maxDownloads: Stop serving after N downloads (default: 1)
         timeoutSeconds: Stop serving after N seconds of inactivity (default: 1800)
-        waitLinkSeconds: Seconds to wait for link generation
         hookUrl: Custom webhook URL for events
         proxy: Proxy server URL (e.g. socks5://127.0.0.1:9050)
         qrInTerminal: Return ASCII QR code art for terminal display
@@ -1328,7 +953,7 @@ def fflShareBase64(
     )
 
     return shareWithFfl(
-        "-", rawBytes, [], name, e2ee, authUser, authPassword, maxDownloads, timeoutSeconds, waitLinkSeconds,
+        "-", rawBytes, [], name, e2ee, authUser, authPassword, maxDownloads, timeoutSeconds,
         hookUrl, proxy, qrInTerminal, **kwargs
     )
 
@@ -1342,7 +967,6 @@ def fflShareFile(
     authPassword: Optional[str] = None,
     maxDownloads: int = 1,
     timeoutSeconds: int = 1800,
-    waitLinkSeconds: int = defaultWaitLinkSeconds,
     hookUrl: Optional[str] = None,
     proxy: Optional[str] = None,
     qrInTerminal: bool = False,
@@ -1382,7 +1006,6 @@ def fflShareFile(
         authPassword: HTTP Basic Auth password to protect the link
         maxDownloads: Stop serving after N downloads, P2P only (default: 1)
         timeoutSeconds: Stop serving after N seconds of inactivity, P2P only (default: 1800)
-        waitLinkSeconds: Seconds to wait for link generation
         hookUrl: Custom webhook URL for events
         proxy: Proxy server URL (e.g. socks5://127.0.0.1:9050)
         qrInTerminal: Return ASCII QR code art for terminal display
@@ -1418,7 +1041,6 @@ def fflShareFile(
         authPassword,
         maxDownloads,
         timeoutSeconds,
-        waitLinkSeconds,
         hookUrl,
         proxy,
         qrInTerminal,
@@ -1453,7 +1075,6 @@ def fflShareFiles(
     authPassword: Optional[str] = None,
     maxDownloads: int = 1,
     timeoutSeconds: int = 1800,
-    waitLinkSeconds: int = defaultWaitLinkSeconds,
     hookUrl: Optional[str] = None,
     proxy: Optional[str] = None,
     qrInTerminal: bool = False,
@@ -1491,7 +1112,6 @@ def fflShareFiles(
         authPassword: HTTP Basic Auth password to protect the link
         maxDownloads: Stop serving after N downloads, P2P only (default: 1)
         timeoutSeconds: Stop serving after N seconds of inactivity, P2P only (default: 1800)
-        waitLinkSeconds: Seconds to wait for link generation
         hookUrl: Custom webhook URL for events
         proxy: Proxy server URL (e.g. socks5://127.0.0.1:9050)
         qrInTerminal: Return ASCII QR code art for terminal display
@@ -1529,7 +1149,6 @@ def fflShareFiles(
         authPassword,
         maxDownloads,
         timeoutSeconds,
-        waitLinkSeconds,
         hookUrl,
         proxy,
         qrInTerminal,
@@ -1599,7 +1218,13 @@ def fflDownload(
             pickup_code=pickupCode,
             recipient_private_key=recipientPrivateKey,
             enable_reporting=enableReporting,
+            log_level="DEBUG" if fflDebugEnabled else None,
         )
+    except ffl.APEProcessError as exc:
+        response = {"ok": False, "url": url, "error": f"Download failed: {exc}"}
+        if fflDebugEnabled:
+            response["debugLogPath"] = writeDebugLog("ffl_download_", exc.result.stdout, exc.result.stderr)
+        return response
     except Exception as exc:
         return {"ok": False, "url": url, "error": f"Download failed: {exc}"}
 
@@ -1612,183 +1237,9 @@ def fflDownload(
     }
     if downloadResult.output_path is not None:
         response["outputPath"] = str(downloadResult.output_path)
-    return response
-
-    command = buildBaseCommand() + ["download", url]
-
-    if outputPath:
-        command += ["--output", outputPath]
-
-    if resume:
-        command.append("--resume")
-
-    if authUser:
-        command += ["--auth-user", authUser]
-
-    if authPassword:
-        command += ["--auth-password", authPassword]
-
-    if recipientAuth:
-        command += ["--recipient-auth", recipientAuth]
-
-    if pickupCode:
-        command += ["--pickup-code", pickupCode]
-
-    if recipientPrivateKey:
-        command += ["--recipient-private-key", recipientPrivateKey]
-
-    if proxy:
-        command += ["--proxy", proxy]
-
-    if enableReporting:
-        command.append("--enable-reporting")
-
     if fflDebugEnabled:
-        command += ["--log-level", "DEBUG"]
-
-    useShell = shouldUseShell(command)
-
-    logger.info("Starting ffl download: %s", shlex.join(command))
-
-    # Always capture output to detect transfer mode (WebRTC P2P vs HTTP fallback)
-    # Use custom debug path if provided, otherwise create temp file
-    logFile, logPath = setupDebugLogging(prefix="ffl_download_output_", customPath=fflDebugPath)
-
-    # Use current working directory instead of script directory for downloads
-    downloadCwd = os.getcwd()
-
-    fflEnv = buildFflEnv()
-
-    try:
-        commandArg = shlex.join(command) if useShell else command
-        result = subprocess.run(
-            commandArg,
-            shell=useShell,
-            stdout=logFile,
-            stderr=logFile,
-            text=True,
-            timeout=600,
-            cwd=downloadCwd,
-            env=fflEnv,
-        )
-
-        if logFile:
-            logFile.close()
-
-        response = {
-            "ok": result.returncode == 0,
-            "returncode": result.returncode,
-            "url": url,
-        }
-
-        # Detect transfer mode and extract output path from ffl output
-        if logPath and os.path.exists(logPath):
-            try:
-                with open(logPath, "r") as f:
-                    output = f.read()
-                    transferMode = "unknown"
-
-                    # Check for WebRTC P2P indicators
-                    if "P2P direct" in output or "WebRTC P2P" in output:
-                        transferMode = "webrtc_p2p"
-                    # Check for HTTP fallback indicators
-                    elif "HTTP fallback" in output:
-                        transferMode = "http_fallback"
-                    # Check for direct HTTP download (not FastFileLink)
-                    elif "HTTP download" in output or "downloading directly via HTTP" in output or "WebRTC not supported" in output:
-                        transferMode = "http_direct"
-
-                    response["transferMode"] = transferMode
-
-                    # Add user-friendly message
-                    if transferMode == "webrtc_p2p":
-                        response["transferInfo"] = "Downloaded via WebRTC P2P (fast, direct connection)"
-                    elif transferMode == "http_fallback":
-                        response["transferInfo"] = "Downloaded via HTTP fallback (WebRTC connection failed)"
-                    elif transferMode == "http_direct":
-                        response["transferInfo"] = "Downloaded via HTTP (regular URL or WebRTC not supported)"
-
-                    # Extract actual output path from ffl output if not explicitly provided
-                    if not outputPath and result.returncode == 0:
-                        # Look for "Downloaded: filename" in output
-                        match = re.search(r"Downloaded:\s+(.+)$", output, re.MULTILINE)
-                        if match:
-                            filename = match.group(1).strip()
-                            # Convert to absolute path
-                            actualPath = os.path.join(downloadCwd, filename)
-                            response["outputPath"] = actualPath
-                        else:
-                            # Fallback: try to extract filename from "Downloading filename"
-                            match = re.search(r"Downloading\s+(.+?)\s+\(", output)
-                            if match:
-                                filename = match.group(1).strip()
-                                actualPath = os.path.join(downloadCwd, filename)
-                                response["outputPath"] = actualPath
-            except Exception as exc:
-                logger.debug("Failed to detect transfer mode or output path: %s", exc)
-
-        # If outputPath was explicitly provided, always use it (overrides parsed path)
-        if outputPath:
-            response["outputPath"] = os.path.abspath(outputPath)
-
-        # Include log path for debugging (always, not just when FFL_DEBUG=1)
-        if logPath:
-            if fflDebugEnabled:
-                response["debugLogPath"] = logPath
-            else:
-                # Clean up log file if not in debug mode and download succeeded
-                if result.returncode == 0:
-                    try:
-                        os.remove(logPath)
-                    except Exception as exc:
-                        logger.debug("Failed to remove download log: %s", exc)
-
-        if result.returncode != 0:
-            errorMsg = "Download failed"
-            # Read error from log file
-            if logPath and os.path.exists(logPath):
-                try:
-                    with open(logPath, "r") as f:
-                        logContent = f.read()
-                        # Extract last few lines for error message
-                        lines = [l for l in logContent.split("\n") if l.strip()]
-                        if lines:
-                            errorMsg += f": {lines[-1]}"
-                except Exception:
-                    pass
-
-            # Check for WSL interop issue
-            wslInteropMsg = checkWSLInteropIssue()
-            if wslInteropMsg:
-                errorMsg += f"\n\n{wslInteropMsg}"
-
-            response["error"] = errorMsg
-            # Keep log file on error for debugging
-            if logPath:
-                response["errorLogPath"] = logPath
-        else:
-            response["message"] = "Download completed successfully"
-
-        return response
-
-    except subprocess.TimeoutExpired:
-        if logFile:
-            logFile.close()
-        return {
-            "ok": False,
-            "error": "Download timed out after 10 minutes",
-            "url": url,
-            "debugLogPath": logPath if logPath else None,
-        }
-    except Exception as exc:
-        if logFile:
-            logFile.close()
-        return {
-            "ok": False,
-            "error": f"Download failed: {str(exc)}",
-            "url": url,
-            "debugLogPath": logPath if logPath else None,
-        }
+        response["debugLogPath"] = writeDebugLog("ffl_download_", downloadResult.stdout, downloadResult.stderr)
+    return response
 
 
 @mcp.tool
@@ -1812,61 +1263,29 @@ def fflKeygen(
         Dictionary with returncode and output describing the generated key paths
     """
     try:
-        keygenResult = ffl.keygen(name, enable_reporting=False)
+        keygenResult = ffl.keygen(
+            name,
+            enable_reporting=False,
+            log_level="DEBUG" if fflDebugEnabled else None,
+        )
+    except ffl.APEProcessError as exc:
+        response = {"ok": False, "error": f"Key generation failed: {exc}"}
+        if fflDebugEnabled:
+            response["debugLogPath"] = writeDebugLog("ffl_keygen_", exc.result.stdout, exc.result.stderr)
+        return response
     except Exception as exc:
         return {"ok": False, "error": f"Key generation failed: {exc}"}
 
-    return {
+    response = {
         "ok": keygenResult.return_code == 0,
         "returncode": keygenResult.return_code,
         "privateKeyPath": str(keygenResult.private_key_path),
         "publicKeyPath": str(keygenResult.public_key_path),
         "output": keygenResult.stdout.strip(),
     }
-
-    command = buildBaseCommand() + ["keygen"]
-
-    if name:
-        command += ["--name", name]
-
     if fflDebugEnabled:
-        command += ["--log-level", "DEBUG"]
-
-    useShell = shouldUseShell(command)
-    logger.info("Running ffl keygen: %s", shlex.join(command))
-
-    logFile, logPath = setupDebugLogging(prefix="ffl_keygen_output_", customPath=fflDebugPath)
-
-    try:
-        fflEnv = buildFflEnv()
-        commandArg = shlex.join(command) if useShell else command
-        result = subprocess.run(
-            commandArg, shell=useShell, stdout=logFile, stderr=logFile, text=True, timeout=60, env=fflEnv
-        )
-    finally:
-        try:
-            logFile.close()
-        except Exception as exc:
-            logger.debug("Failed to close keygen log file: %s", exc)
-
-    output = ""
-    if logPath and os.path.exists(logPath):
-        try:
-            with open(logPath, "r") as f:
-                output = f.read()
-        except Exception as exc:
-            logger.debug("Failed to read keygen output: %s", exc)
-        if not fflDebugEnabled:
-            try:
-                os.remove(logPath)
-            except Exception as exc:
-                logger.debug("Failed to remove keygen log: %s", exc)
-
-    return {
-        "ok": result.returncode == 0,
-        "returncode": result.returncode,
-        "output": output.strip(),
-    }
+        response["debugLogPath"] = writeDebugLog("ffl_keygen_", keygenResult.stdout, keygenResult.stderr)
+    return response
 
 
 @mcp.tool

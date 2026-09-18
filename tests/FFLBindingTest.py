@@ -37,7 +37,7 @@ class FFLBindingTest(unittest.TestCase):
         with patch.object(MCP.ffl, "share", return_value=session) as share:
             result = MCP.shareWithFfl(
                 "file.txt", None, [], None, False, None, None, 1, 30,
-                10, "http://127.0.0.1:9000/events", None, False,
+                "http://127.0.0.1:9000/events", None, False,
             )
 
         self.assertEqual(result["link"], session.link)
@@ -76,12 +76,10 @@ class FFLBindingTest(unittest.TestCase):
     def testShareTextStreamsWithoutCreatingTemporaryFile(self):
         session = FakeShareSession()
         with patch.object(MCP, "fflUseStdin", True), \
-             patch.object(MCP.ffl, "share_stream", return_value=session) as shareStream, \
-             patch.object(MCP, "createTempFile") as createTempFile:
+             patch.object(MCP.ffl, "share_stream", return_value=session) as shareStream:
             result = MCP.fflShareText("stream me", name="message.txt")
 
         self.assertEqual(result["link"], session.link)
-        self.assertFalse(createTempFile.called)
         source, contentName = shareStream.call_args.args[:2]
         self.assertEqual(contentName, "message.txt")
         self.assertEqual(source.read(), b"stream me")
@@ -89,12 +87,10 @@ class FFLBindingTest(unittest.TestCase):
     def testShareBase64UsesBindingTemporaryOwnershipWhenNotStreaming(self):
         session = FakeShareSession()
         with patch.object(MCP, "fflUseStdin", False), \
-             patch.object(MCP.ffl, "share_bytes", return_value=session) as shareBytes, \
-             patch.object(MCP, "createTempFile") as createTempFile:
+             patch.object(MCP.ffl, "share_bytes", return_value=session) as shareBytes:
             result = MCP.fflShareBase64("AP+AQQ==", name="payload.bin")
 
         self.assertEqual(result["link"], session.link)
-        self.assertFalse(createTempFile.called)
         self.assertEqual(shareBytes.call_args.args[:2], (b"\x00\xff\x80A", "payload.bin"))
 
     def testDownloadReturnsBindingMetadataInsteadOfParsingCliOutput(self):

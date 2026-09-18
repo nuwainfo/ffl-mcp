@@ -16,7 +16,6 @@
 """
 Tests for environment variable / config parsing:
   - ParseFflDebugTest  — FFL_DEBUG path and flag parsing
-  - ShellModeTest      — shouldUseShell() platform detection
 """
 
 import os
@@ -74,36 +73,6 @@ class ParseFflDebugTest(unittest.TestCase):
             enabled, path = MCP.parseFflDebug()
         self.assertTrue(enabled)
         self.assertEqual(path, "/tmp/ffl_debug.log")
-
-
-class ShellModeTest(unittest.TestCase):
-
-    def testEmptyCommandReturnsFalse(self):
-        self.assertFalse(MCP.shouldUseShell([]))
-
-    def testOnWindowsComFilesDoNotUseShell(self):
-        with patch("platform.system", return_value="Windows"):
-            self.assertFalse(MCP.shouldUseShell([r"C:\tools\ffl.com", "--version"]))
-
-    def testOnLinuxComFilesUseShell(self):
-        with patch("platform.system", return_value="Linux"):
-            with patch.object(MCP, "fflShellMode", False):
-                self.assertTrue(MCP.shouldUseShell(["/usr/local/bin/ffl.com", "--version"]))
-
-    def testOnLinuxNonComFileDoesNotUseShell(self):
-        with patch("platform.system", return_value="Linux"):
-            with patch.object(MCP, "fflShellMode", False):
-                self.assertFalse(MCP.shouldUseShell(["/usr/local/bin/ffl", "--version"]))
-
-    def testExplicitShellModeOverridesEverything(self):
-        with patch.object(MCP, "fflShellMode", True):
-            self.assertTrue(MCP.shouldUseShell(["ffl", "--version"]))
-            self.assertTrue(MCP.shouldUseShell(["ffl.com", "--version"]))
-
-    def testNonComExtensionNotShellOnLinux(self):
-        with patch("platform.system", return_value="Linux"):
-            with patch.object(MCP, "fflShellMode", False):
-                self.assertFalse(MCP.shouldUseShell(["python", "Core.py", "--cli"]))
 
 
 if __name__ == "__main__":

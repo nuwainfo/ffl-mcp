@@ -36,13 +36,7 @@ from install.Backends import (
 
 
 envKeys = [
-    "FFL_BIN",
-    "FFL_RUN_MODE",
-    "FFL_PYTHON",
-    "FFL_CORE_PATH",
-    "FFL_COMMAND",
     "FFL_USE_STDIN",
-    "FFL_WAIT_LINK_SECONDS",
     "ALLOWED_BASE_DIR",
 ]
 
@@ -265,7 +259,6 @@ def main() -> None:
     parser.add_argument("--overwrite", action="store_true", default=False)
     parser.add_argument("--uninstall", action="store_true", default=False)
     parser.add_argument("--print", action="store_true", dest="printOnly")
-    parser.add_argument("--ffl-bin", dest="fflBin")
     parser.add_argument("--allowed-base-dir", dest="allowedBaseDir")
     parser.add_argument("--use-stdin", choices=["0", "1"], dest="useStdin")
     parser.add_argument("--cli-scope", dest="cliScope", default="user")
@@ -299,8 +292,6 @@ def main() -> None:
     uvxFrom = args.uvxFrom or inferUvxFromSpec()
 
     envOverrides: Dict[str, str] = {}
-    if args.fflBin:
-        envOverrides["FFL_BIN"] = args.fflBin
     if args.allowedBaseDir:
         envOverrides["ALLOWED_BASE_DIR"] = args.allowedBaseDir
     if args.useStdin:

@@ -22,8 +22,6 @@ Import this in each integration test file:
 
 import logging
 import os
-import shlex
-import subprocess
 import sys
 import tempfile
 import unittest
@@ -43,18 +41,10 @@ def callTool(tool, **kwargs):
 
 
 def _fflBinaryAvailable() -> bool:
-    """Return True if the ffl binary exists and executes successfully."""
-    fflBin = MCP.resolveDefaultFflBin()
-    if fflBin != "ffl" and not Path(fflBin).exists():
-        return False
+    """Return True if the ffl-python binding's bundled ffl engine executes successfully."""
     try:
-        cmd = [fflBin, "--version"]
-        useShell = MCP.shouldUseShell(cmd)
-        if useShell:
-            result = subprocess.run(shlex.join(cmd), shell=True, capture_output=True, timeout=10)
-        else:
-            result = subprocess.run(cmd, shell=False, capture_output=True, timeout=10)
-        return result.returncode == 0
+        MCP.ffl.version()
+        return True
     except Exception as exc:
         logger.debug("ffl binary check failed: %s", exc)
         return False
@@ -75,7 +65,6 @@ class FflIntegrationBase(unittest.TestCase):
     - tearDown: stop all active sessions and remove tracked temp files
     - _trackTempPath(): register a path for cleanup after the test
     - _makeTempPath(): create and track a temp file, returns its path
-    - _runFfl(): run ffl with the correct shell mode, returns CompletedProcess
     """
 
     def setUp(self):
@@ -102,10 +91,3 @@ class FflIntegrationBase(unittest.TestCase):
         tempFile = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
         tempFile.close()
         return self._trackTempPath(tempFile.name)
-
-    def _runFfl(self, args, timeout: int = 10) -> subprocess.CompletedProcess:
-        cmd = MCP.buildBaseCommand() + args
-        useShell = MCP.shouldUseShell(cmd)
-        if useShell:
-            return subprocess.run(shlex.join(cmd), shell=True, capture_output=True, text=True, timeout=timeout)
-        return subprocess.run(cmd, shell=False, capture_output=True, text=True, timeout=timeout)

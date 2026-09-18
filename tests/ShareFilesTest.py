@@ -17,7 +17,6 @@
 Tests for fflShareFiles() — multiple-file sharing.
 
   - ShareFilesValidationTest  — path validation logic (unit, no binary)
-  - ShareFilesArgsTest        — verifies multi-file paths are passed as leading positional args
 """
 
 import sys
@@ -64,55 +63,6 @@ class ShareFilesValidationTest(unittest.TestCase):
                         callTool(MCP.fflShareFiles, paths=[outsidePath])
             finally:
                 Path(outsidePath).unlink(missing_ok=True)
-
-
-class ShareFilesArgsTest(unittest.TestCase):
-    """Verify that multi-file paths become leading positional args in buildShareArgs."""
-
-    def testMultiplePathsPrefixArgs(self):
-        files = ["report.pdf", "data.csv", "notes.txt"]
-        args = MCP.buildShareArgs(
-            shareTarget=files,
-            name=None,
-            e2ee=False,
-            authUser=None,
-            authPassword=None,
-            maxDownloads=1,
-            timeoutSeconds=30,
-            hookUrl=None,
-            proxy=None,
-        )
-        self.assertEqual(args[0], "report.pdf")
-        self.assertEqual(args[1], "data.csv")
-        self.assertEqual(args[2], "notes.txt")
-
-    def testOptionsAppendAfterAllPaths(self):
-        files = ["a.zip", "b.zip"]
-        args = MCP.buildShareArgs(
-            shareTarget=files,
-            name="bundle.zip",
-            e2ee=True,
-            authUser=None,
-            authPassword=None,
-            maxDownloads=1,
-            timeoutSeconds=30,
-            hookUrl=None,
-            proxy=None,
-        )
-        lastPathIdx = args.index("b.zip")
-        nameIdx = args.index("--name")
-        e2eeIdx = args.index("--e2ee")
-        self.assertGreater(nameIdx, lastPathIdx)
-        self.assertGreater(e2eeIdx, lastPathIdx)
-
-    def testSingleStringAndSingleElementListProduceSameArgs(self):
-        kwargs = dict(
-            name=None, e2ee=True, authUser=None, authPassword=None,
-            maxDownloads=1, timeoutSeconds=30, hookUrl=None, proxy=None,
-        )
-        argsFromStr = MCP.buildShareArgs(shareTarget="file.txt", **kwargs)
-        argsFromList = MCP.buildShareArgs(shareTarget=["file.txt"], **kwargs)
-        self.assertEqual(argsFromStr, argsFromList)
 
 
 if __name__ == "__main__":
