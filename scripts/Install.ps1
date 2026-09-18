@@ -1,7 +1,7 @@
 # ffl-mcp installer for Windows
 #
 # Usage:
-#   iwr -useb https://raw.githubusercontent.com/nuwainfo/ffl-mcp/refs/heads/main/install.ps1 | iex
+#   iwr -useb https://raw.githubusercontent.com/nuwainfo/ffl-mcp/refs/heads/main/scripts/Install.ps1 | iex
 
 $ErrorActionPreference = 'Stop'
 

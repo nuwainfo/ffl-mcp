@@ -2,7 +2,7 @@
 # ffl-mcp installer for Linux / macOS
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/nuwainfo/ffl-mcp/refs/heads/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/nuwainfo/ffl-mcp/refs/heads/main/scripts/Install.sh | bash
 
 set -euo pipefail
 

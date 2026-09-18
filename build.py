@@ -358,7 +358,7 @@ def writeHelperScripts():
 
 
 def buildInstaller(exePath: Path) -> Optional[Path]:
-    """Build a Windows installer from installer.nsi using NSIS."""
+    """Build a Windows installer from scripts/Installer.nsi using NSIS."""
     print("\n[6/6] Building Windows installer...")
 
     if platform.system() != "Windows":
@@ -372,7 +372,7 @@ def buildInstaller(exePath: Path) -> Optional[Path]:
         print("  Then re-run:  python build.py --installer-only")
         return None
 
-    nsiScript = Path("installer.nsi")
+    nsiScript = Path("scripts") / "Installer.nsi"
     if not nsiScript.exists():
         print(f"  ERROR: {nsiScript} not found.", file=sys.stderr)
         return None

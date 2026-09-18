@@ -52,7 +52,7 @@ No command line needed — the installer registers ffl-mcp with Claude Desktop a
 ### Linux / macOS — one-liner
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/nuwainfo/ffl-mcp/refs/heads/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/nuwainfo/ffl-mcp/refs/heads/main/scripts/Install.sh | bash
 ```
 
 Downloads the platform binary from the latest GitHub release and runs `ffl-mcp install` to register with Claude, Codex, and Grok Build. Falls back to `uvx` automatically if no binary is available for your platform.
@@ -60,7 +60,7 @@ Downloads the platform binary from the latest GitHub release and runs `ffl-mcp i
 ### Windows — one-liner (PowerShell)
 
 ```powershell
-iwr -useb https://raw.githubusercontent.com/nuwainfo/ffl-mcp/refs/heads/main/install.ps1 | iex
+iwr -useb https://raw.githubusercontent.com/nuwainfo/ffl-mcp/refs/heads/main/scripts/Install.ps1 | iex
 ```
 
 Downloads `ffl-mcp.exe` from the latest GitHub release and registers it with Claude, Codex, and Grok Build.
