@@ -24,13 +24,8 @@ import unittest
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent / "scripts"))
 
 from Build import generateInstallScript, generateUninstallScript
-from install.Backends import (
-    TomlMcpBackend,
-    buildTomlServerConfig,
-    getDefaultGrokConfigPath,
-    removeTomlServerConfig,
-)
-from install.Install import normalizeInstallTargets
+from install.backends import TomlMcpBackend, buildTomlServerConfig, getDefaultGrokConfigPath, removeTomlServerConfig
+from install.Install import collectEnv, inferUvxFromSpec, loadAppConfig, normalizeInstallTargets, parseEnvAssignment, parseEnvFile
 
 
 class InstallerConfigTest(unittest.TestCase):
@@ -135,6 +130,72 @@ command = "node"
         buildText = (repoRoot / "scripts" / "Build.py").read_text(encoding="utf-8")
         self.assertIn("FAST_MCP_REQUIREMENT", buildText)
         self.assertNotIn('"fastmcp>=2,<3"', buildText)
+
+
+class AppConfigTest(unittest.TestCase):
+    """`install/Install.py` is generic; these confirm the external-manifest mechanism it reads app-specific
+    defaults from actually works, independent of any particular app's own install.config.json content."""
+
+    def testLoadAppConfigReadsManifest(self):
+        with tempfile.TemporaryDirectory() as tempDir:
+            configPath = pathlib.Path(tempDir) / "install.config.json"
+            configPath.write_text(
+                '{"serverName": "demo", "entrypoint": "demo-mcp", "distributionName": "demo-mcp", '
+                '"envKeys": ["DEMO_TOKEN"], "binaryEnvVar": "DEMO_BINARY", '
+                '"defaultEnvValues": {"DEMO_TOKEN": "fallback"}, "envWarnings": {"DEMO_TOKEN": "set a token"}}',
+                encoding="utf-8",
+            )
+            appConfig = loadAppConfig(str(configPath))
+
+        self.assertEqual(appConfig.serverName, "demo")
+        self.assertEqual(appConfig.entrypoint, "demo-mcp")
+        self.assertEqual(appConfig.distributionName, "demo-mcp")
+        self.assertEqual(appConfig.envKeys, ["DEMO_TOKEN"])
+        self.assertEqual(appConfig.binaryEnvVar, "DEMO_BINARY")
+        self.assertEqual(appConfig.defaultEnvValues, {"DEMO_TOKEN": "fallback"})
+        self.assertEqual(appConfig.envWarnings, {"DEMO_TOKEN": "set a token"})
+
+    def testLoadAppConfigMissingFileRaises(self):
+        with self.assertRaises(FileNotFoundError):
+            loadAppConfig("/nonexistent/install.config.json")
+
+    def testLoadAppConfigRequiresServerNameAndEntrypoint(self):
+        with tempfile.TemporaryDirectory() as tempDir:
+            configPath = pathlib.Path(tempDir) / "install.config.json"
+            configPath.write_text("{}", encoding="utf-8")
+            with self.assertRaises(ValueError):
+                loadAppConfig(str(configPath))
+
+    def testFflMcpOwnManifestLoadsAndMatchesDocumentedDefaults(self):
+        repoRoot = pathlib.Path(__file__).resolve().parents[1]
+        appConfig = loadAppConfig(str(repoRoot / "install.config.json"))
+
+        self.assertEqual(appConfig.serverName, "ffl")
+        self.assertEqual(appConfig.entrypoint, "ffl-mcp")
+        self.assertEqual(appConfig.distributionName, "ffl-mcp")
+        self.assertEqual(set(appConfig.envKeys), {"FFL_USE_STDIN", "ALLOWED_BASE_DIR"})
+        self.assertEqual(appConfig.binaryEnvVar, "FFL_MCP_BINARY")
+
+    def testParseEnvAssignmentSplitsOnFirstEquals(self):
+        self.assertEqual(parseEnvAssignment("KEY=a=b"), ("KEY", "a=b"))
+        with self.assertRaises(ValueError):
+            parseEnvAssignment("NO_EQUALS_SIGN")
+
+    def testParseEnvFileSkipsBlankLinesAndComments(self):
+        with tempfile.TemporaryDirectory() as tempDir:
+            envPath = pathlib.Path(tempDir) / ".env"
+            envPath.write_text("# comment\n\nALLOWED_BASE_DIR=/tmp/shared\nFFL_USE_STDIN=1\n", encoding="utf-8")
+            self.assertEqual(
+                parseEnvFile(envPath),
+                {"ALLOWED_BASE_DIR": "/tmp/shared", "FFL_USE_STDIN": "1"},
+            )
+
+    def testCollectEnvOnlyForwardsConfiguredKeys(self):
+        env = collectEnv({"ALLOWED_BASE_DIR": "/tmp", "UNRELATED": "ignored"}, ["ALLOWED_BASE_DIR", "FFL_USE_STDIN"])
+        self.assertEqual(env, {"ALLOWED_BASE_DIR": "/tmp"})
+
+    def testInferUvxFromSpecReturnsNoneWithoutDistributionName(self):
+        self.assertIsNone(inferUvxFromSpec(None))
 
 
 if __name__ == "__main__":

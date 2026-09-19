@@ -1,0 +1,13 @@
+{
+  "serverName": "ffl",
+  "entrypoint": "ffl-mcp",
+  "distributionName": "ffl-mcp",
+  "binaryEnvVar": "FFL_MCP_BINARY",
+  "envKeys": ["FFL_USE_STDIN", "ALLOWED_BASE_DIR"],
+  "defaultEnvValues": {
+    "FFL_USE_STDIN": "1"
+  },
+  "envWarnings": {
+    "ALLOWED_BASE_DIR": "ALLOWED_BASE_DIR is not set. This allows sharing any path. Recommended: pass --env ALLOWED_BASE_DIR=<dir> to restrict file sharing."
+  }
+}

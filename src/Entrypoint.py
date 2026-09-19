@@ -29,6 +29,7 @@ decide whether to write a direct binary command or a uvx command.
 """
 
 import os
+import pathlib
 import sys
 
 from importlib.metadata import version
@@ -50,6 +51,16 @@ def main() -> None:
         binaryPath = os.environ.get("PYAPP")
         if binaryPath and binaryPath != "1" and os.path.isfile(binaryPath):
             os.environ["FFL_MCP_BINARY"] = binaryPath
+
+        # install/Install.py is generic and reads its app-specific defaults (server
+        # name, entrypoint, forwarded env vars, ...) from this manifest rather than
+        # hardcoding them — see install.config.json and install/Install.py's module
+        # docstring. Point it there explicitly since the installed binary's cwd
+        # won't generally be the repo root where a bare `install.config.json` would
+        # otherwise be auto-discovered.
+        appConfigPath = pathlib.Path(__file__).resolve().parent.parent / "install.config.json"
+        if appConfigPath.is_file() and "--app-config" not in sys.argv:
+            sys.argv.extend(["--app-config", str(appConfigPath)])
 
         from install.Install import main as installMain
         if command == "uninstall":

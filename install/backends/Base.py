@@ -17,104 +17,39 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Native MCP-client configuration backends.
+"""Generic, client-agnostic MCP install-backend mechanisms.
 
 MCP standardizes the protocol between a host and a server, but each host owns
-its own registration format and location.  Keep those details here so the
-command-line installer only selects and orchestrates backends.
+its own registration format and location. This module holds the two shared
+mechanisms every file-editing client reuses — a JSON ``mcpServers`` file and a
+TOML ``mcp_servers`` file — plus the ``ConfigBackend`` interface both
+implement and the raw file/TOML helpers they're built on. Nothing in this
+module names a specific client (Claude, Codex, ...); that lives in its own
+sibling module (``Claude.py``, ``Codex.py``, ``Grok.py``, ...) which imports
+from here.
 """
 
 from __future__ import annotations
 
 import datetime
 import json
-import os
 import pathlib
 import re
-import shutil
 import subprocess
 
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple
 
 
-def getDefaultClaudeDesktopConfigPath() -> pathlib.Path:
-    homePath = pathlib.Path.home()
-
-    if os.name == "nt":
-        appData = os.environ.get("APPDATA")
-        if appData:
-            return pathlib.Path(appData) / "Claude" / "claude_desktop_config.json"
-        return homePath / "AppData" / "Roaming" / "Claude" / "claude_desktop_config.json"
-
-    if os.sys.platform == "darwin":
-        return homePath / "Library" / "Application Support" / "Claude" / "claude_desktop_config.json"
-
-    xdgConfigHome = os.environ.get("XDG_CONFIG_HOME")
-    if xdgConfigHome:
-        return pathlib.Path(xdgConfigHome) / "Claude" / "claude_desktop_config.json"
-
-    return homePath / ".config" / "Claude" / "claude_desktop_config.json"
-
-
-def getDefaultCodexConfigPath() -> pathlib.Path:
-    return pathlib.Path.home() / ".codex" / "config.toml"
-
-
-def getDefaultGrokConfigPath() -> pathlib.Path:
-    grokHome = os.environ.get("GROK_HOME")
-    if grokHome:
-        return pathlib.Path(grokHome).expanduser() / "config.toml"
-
-    return pathlib.Path.home() / ".grok" / "config.toml"
-
-
-def getClaudeCliPath() -> Optional[str]:
-    envPath = os.environ.get("CLAUDE_CLI_PATH") or os.environ.get("CLAUDE_BIN")
-    if envPath and pathlib.Path(envPath).exists():
-        return envPath
-
-    whichPath = shutil.which("claude")
-    if whichPath:
-        return whichPath
-
-    homePath = pathlib.Path.home()
-    candidatePaths = [
-        homePath / ".local" / "bin" / "claude",
-        homePath / ".volta" / "bin" / "claude",
-        homePath / ".asdf" / "shims" / "claude",
-        pathlib.Path("/usr/local/bin/claude"),
-        pathlib.Path("/opt/homebrew/bin/claude"),
-        pathlib.Path("/usr/bin/claude"),
-    ]
-    for candidate in candidatePaths:
-        if candidate.exists():
-            return str(candidate)
-
-    nvmRoots = [os.environ.get("NVM_DIR"), str(homePath / ".nvm")]
-    for nvmRoot in nvmRoots:
-        if not nvmRoot:
-            continue
-            
-        nvmPath = pathlib.Path(nvmRoot)
-        if not nvmPath.exists():
-            continue
-            
-        for candidate in nvmPath.glob("versions/node/*/bin/claude"):
-            if candidate.exists():
-                return str(candidate)
-                
-    return None
-
-
 def runCommand(command: list[str], allowFailure: bool = False) -> None:
+    """Run a CLI-based backend's command; raise with its output on failure."""
     result = subprocess.run(command, check=False, capture_output=True, text=True, encoding="utf-8", errors="replace")
     if result.returncode == 0:
         return
-        
+
     if allowFailure:
         return
-        
+
     stderrText = result.stderr.strip()
     stdoutText = result.stdout.strip()
     detailParts = [part for part in [stderrText, stdoutText] if part]
@@ -134,8 +69,10 @@ def readJsonFile(path: pathlib.Path) -> Dict[str, Any]:
         data = json.loads(rawText)
     except json.JSONDecodeError as exc:
         raise ValueError(f"Invalid JSON in {path}: {exc}") from exc
+
     if not isinstance(data, dict):
         raise ValueError(f"Expected JSON object in {path}, got {type(data).__name__}")
+
     return data
 
 
@@ -174,6 +111,7 @@ def tomlArray(values: list[str]) -> str:
 def tomlKey(key: str) -> str:
     if re.fullmatch(r"[A-Za-z0-9_-]+", key):
         return key
+
     return tomlString(key)
 
 
@@ -234,7 +172,7 @@ class InstallResult:
 
 
 class ConfigBackend:
-    """A client-owned config file that can register one stdio MCP server."""
+    """A client-owned config file (or CLI) that can register one stdio MCP server."""
 
     def __init__(self, target: str, label: str, configPath: pathlib.Path):
         self.target = target
@@ -249,7 +187,7 @@ class ConfigBackend:
 
 
 class JsonMcpBackend(ConfigBackend):
-    """Claude Desktop's JSON ``mcpServers`` configuration."""
+    """A client's JSON ``mcpServers`` configuration file (e.g. Claude Desktop)."""
 
     def install(self, serverName: str, entry: Dict[str, Any], overwrite: bool) -> InstallResult:
         config = readJsonFile(self.configPath)
@@ -283,7 +221,7 @@ class JsonMcpBackend(ConfigBackend):
 
 
 class TomlMcpBackend(ConfigBackend):
-    """Codex and Grok Build's ``mcp_servers`` TOML configuration."""
+    """A client's ``mcp_servers`` TOML configuration file (e.g. Codex, Grok Build)."""
 
     def install(self, serverName: str, entry: Dict[str, Any], overwrite: bool) -> InstallResult:
         configText = self.configPath.read_text(encoding="utf-8") if self.configPath.exists() else ""
@@ -309,36 +247,3 @@ class TomlMcpBackend(ConfigBackend):
         backupPath = backupFile(self.configPath)
         writeTextAtomic(self.configPath, updatedText)
         return InstallResult(self.target, self.label, self.configPath, backupPath, changed=True)
-
-
-class ClaudeCliBackend(ConfigBackend):
-    """Claude Code's CLI-based registration (``claude mcp add-json`` / ``remove``).
-
-    Unlike the file-editing backends above, there is no config file for this
-    process to read or write directly — the `claude` CLI owns that. `configPath`
-    holds the CLI executable's own path instead, purely for the install/uninstall
-    summary output; `backupPath` is always None since there is no file to back up.
-    """
-
-    def __init__(self, target: str, label: str, cliPath: str, scope: str):
-        super().__init__(target, label, pathlib.Path(cliPath))
-        self.cliPath = cliPath
-        self.scope = scope
-
-    def install(self, serverName: str, entry: Dict[str, Any], overwrite: bool) -> InstallResult:
-        command = [
-            self.cliPath, "mcp", "add-json", "-s", self.scope, serverName,
-            json.dumps(entry, ensure_ascii=True),
-        ]
-    
-        if overwrite:
-            runCommand([self.cliPath, "mcp", "remove", "-s", self.scope, serverName], allowFailure=True)
-            
-        runCommand(command)
-        
-        return InstallResult(self.target, self.label, self.configPath, None, changed=True)
-
-    def uninstall(self, serverName: str) -> InstallResult:
-        runCommand([self.cliPath, "mcp", "remove", "-s", self.scope, serverName], allowFailure=True)
-        
-        return InstallResult(self.target, self.label, self.configPath, None, changed=True)

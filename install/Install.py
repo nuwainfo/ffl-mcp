@@ -17,6 +17,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""Generic MCP-server installer CLI.
+
+This module has no ffl-mcp-specific code in it — every app-specific detail
+(server name, entrypoint command, which env vars to forward, the PyPI
+distribution name used for uvx-source inference, the env var a standalone
+binary uses to identify itself) is read from an external JSON manifest at
+runtime (see `loadAppConfig()`). That's what makes `install/` (this file plus
+the `install/backends` package) reusable as-is by other MCP server projects:
+point `--app-config` at your own manifest and this file needs no changes.
+
+ffl-mcp's own manifest lives at the repo root as `install.config.json`.
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -26,29 +39,98 @@ import os
 import pathlib
 import subprocess
 
-from typing import Any, Dict, Optional, Tuple
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional, Tuple
 
-from install.Backends import (
+from install.backends import (
     ClaudeCliBackend,
+    ClaudeDesktopBackend,
+    CodexBackend,
     ConfigBackend,
-    JsonMcpBackend,
-    TomlMcpBackend,
+    GrokBackend,
     getClaudeCliPath,
     getDefaultClaudeDesktopConfigPath,
     getDefaultCodexConfigPath,
     getDefaultGrokConfigPath,
 )
 
-
-envKeys = [
-    "FFL_USE_STDIN",
-    "ALLOWED_BASE_DIR",
-]
+defaultAppConfigFilename = "install.config.json"
+appConfigEnvVar = "INSTALL_APP_CONFIG"
 
 
-def inferUvxFromSpec() -> Optional[str]:
+@dataclass(frozen=True)
+class AppConfig:
+    serverName: str
+    entrypoint: str
+    envKeys: List[str] = field(default_factory=list)
+    distributionName: Optional[str] = None
+    binaryEnvVar: Optional[str] = None
+    defaultEnvValues: Dict[str, str] = field(default_factory=dict)
+    envWarnings: Dict[str, str] = field(default_factory=dict)
+
+
+def resolveAppConfigPath(explicitPath: Optional[str]) -> pathlib.Path:
+    if explicitPath:
+        return pathlib.Path(explicitPath).expanduser().resolve(strict=False)
+
+    envPath = os.environ.get(appConfigEnvVar)
+    if envPath:
+        return pathlib.Path(envPath).expanduser().resolve(strict=False)
+
+    return pathlib.Path.cwd() / defaultAppConfigFilename
+
+
+def loadAppConfig(explicitPath: Optional[str]) -> AppConfig:
+    configPath = resolveAppConfigPath(explicitPath)
+    if not configPath.exists():
+        raise FileNotFoundError(
+            f"App config not found: {configPath}. Pass --app-config, set {appConfigEnvVar}, "
+            f"or run from a directory containing {defaultAppConfigFilename}."
+        )
+
+    data = json.loads(configPath.read_text(encoding="utf-8"))
+    missingKeys = [key for key in ("serverName", "entrypoint") if key not in data]
+    if missingKeys:
+        raise ValueError(f"{configPath} is missing required key(s): {', '.join(missingKeys)}")
+
+    return AppConfig(
+        serverName=data["serverName"],
+        entrypoint=data["entrypoint"],
+        envKeys=list(data.get("envKeys", [])),
+        distributionName=data.get("distributionName"),
+        binaryEnvVar=data.get("binaryEnvVar"),
+        defaultEnvValues=dict(data.get("defaultEnvValues", {})),
+        envWarnings=dict(data.get("envWarnings", {})),
+    )
+
+
+def parseEnvAssignment(text: str) -> Tuple[str, str]:
+    if "=" not in text:
+        raise ValueError(f"Invalid --env value {text!r}, expected KEY=VALUE")
+
+    key, value = text.split("=", 1)
+    return key.strip(), value
+
+
+def parseEnvFile(path: pathlib.Path) -> Dict[str, str]:
+    env: Dict[str, str] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        strippedLine = line.strip()
+        if not strippedLine or strippedLine.startswith("#"):
+            continue
+
+        key, value = parseEnvAssignment(strippedLine)
+        env[key] = value
+
+    return env
+
+
+def inferUvxFromSpec(distributionName: Optional[str]) -> Optional[str]:
+    if not distributionName:
+        return None
+
     try:
-        distInfo = importlib.metadata.distribution("ffl-mcp")
+        distInfo = importlib.metadata.distribution(distributionName)
     except importlib.metadata.PackageNotFoundError:
         return None
 
@@ -66,7 +148,7 @@ def inferUvxFromSpec() -> Optional[str]:
 
     if not isinstance(url, str) or not url:
         return None
-        
+
     # file:// URLs are local paths (e.g. bundled wheels) — useless as a uvx source
     if url.startswith("file://"):
         return None
@@ -84,7 +166,7 @@ def inferUvxFromSpec() -> Optional[str]:
     return None
 
 
-def collectEnv(overrides: Dict[str, str]) -> Dict[str, str]:
+def collectEnv(overrides: Dict[str, str], envKeys: List[str]) -> Dict[str, str]:
     env: Dict[str, str] = {}
     for key in envKeys:
         value = overrides.get(key)
@@ -114,14 +196,6 @@ def buildMcpServerEntry(
     if env:
         entry["env"] = env
     return serverName, entry
-
-
-def buildUvxArgs(uvxFrom: Optional[str], entrypoint: str) -> Dict[str, Any]:
-    args = ["uvx"]
-    if uvxFrom:
-        args += ["--from", uvxFrom]
-    args.append(entrypoint)
-    return {"command": args[0], "args": args[1:]}
 
 
 def warmPyappBinary(binaryPath: Optional[str]) -> None:
@@ -174,35 +248,35 @@ def buildConfigBackends(
     cliScope: str,
 ) -> Dict[str, ConfigBackend]:
     backends: Dict[str, ConfigBackend] = {
-        "claude-desktop": JsonMcpBackend("claude-desktop", "Claude Desktop", claudeConfigPath),
-        "codex": TomlMcpBackend("codex", "Codex", codexConfigPath),
-        "grok-build": TomlMcpBackend("grok-build", "Grok Build", grokConfigPath),
+        "claude-desktop": ClaudeDesktopBackend(claudeConfigPath),
+        "codex": CodexBackend(codexConfigPath),
+        "grok-build": GrokBackend(grokConfigPath),
     }
 
     claudeCliPath = getClaudeCliPath()
     if claudeCliPath:
-        backends["claude-code"] = ClaudeCliBackend(
-            "claude-code", f"Claude Code CLI (scope: {cliScope})", claudeCliPath, cliScope
-        )
+        backends["claude-code"] = ClaudeCliBackend(claudeCliPath, cliScope)
 
     return backends
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Install ffl-mcp into supported MCP clients."
-    )
+    parser = argparse.ArgumentParser(description="Install an MCP server into supported MCP clients.")
+    parser.add_argument("--app-config", dest="appConfigPath", help=f"Path to {defaultAppConfigFilename} (optional).")
     parser.add_argument("--config", dest="configPath", help="Path to claude_desktop_config.json (optional).")
     parser.add_argument("--codex-config", dest="codexConfigPath", help="Path to Codex config.toml (optional).")
     parser.add_argument("--grok-config", dest="grokConfigPath", help="Path to Grok config.toml (optional).")
-    parser.add_argument("--server-name", default="ffl", dest="serverName")
-    parser.add_argument("--entrypoint", default="ffl-mcp", dest="entrypoint")
+    parser.add_argument("--server-name", dest="serverName", help="Overrides the app config's serverName.")
+    parser.add_argument("--entrypoint", dest="entrypoint", help="Overrides the app config's entrypoint.")
     parser.add_argument("--from", dest="uvxFrom", help="Force uvx --from spec (e.g. git+https://...).")
     parser.add_argument("--overwrite", action="store_true", default=False)
     parser.add_argument("--uninstall", action="store_true", default=False)
     parser.add_argument("--print", action="store_true", dest="printOnly")
-    parser.add_argument("--allowed-base-dir", dest="allowedBaseDir")
-    parser.add_argument("--use-stdin", choices=["0", "1"], dest="useStdin")
+    parser.add_argument(
+        "--env", dest="envAssignments", action="append", metavar="KEY=VALUE",
+        help="Set an MCP server env var; repeatable.",
+    )
+    parser.add_argument("--env-file", dest="envFilePath", help="Load MCP server env vars from a KEY=VALUE file.")
     parser.add_argument("--cli-scope", dest="cliScope", default="user")
     parser.add_argument(
         "--target",
@@ -215,6 +289,10 @@ def main() -> None:
     )
     parser.add_argument("-y", "--yes", action="store_true", dest="assumeYes")
     args = parser.parse_args()
+
+    appConfig = loadAppConfig(args.appConfigPath)
+    serverName = args.serverName or appConfig.serverName
+    entrypoint = args.entrypoint or appConfig.entrypoint
 
     if args.configPath:
         configPath = pathlib.Path(args.configPath).expanduser().resolve(strict=False)
@@ -231,32 +309,33 @@ def main() -> None:
     else:
         grokConfigPath = getDefaultGrokConfigPath()
 
-    uvxFrom = args.uvxFrom or inferUvxFromSpec()
+    uvxFrom = args.uvxFrom or inferUvxFromSpec(appConfig.distributionName)
 
     envOverrides: Dict[str, str] = {}
-    if args.allowedBaseDir:
-        envOverrides["ALLOWED_BASE_DIR"] = args.allowedBaseDir
-    if args.useStdin:
-        envOverrides["FFL_USE_STDIN"] = args.useStdin
+    if args.envFilePath:
+        envOverrides.update(parseEnvFile(pathlib.Path(args.envFilePath).expanduser().resolve(strict=False)))
+    for assignment in args.envAssignments or []:
+        key, value = parseEnvAssignment(assignment)
+        envOverrides[key] = value
 
-    env = collectEnv(envOverrides)
-    if "FFL_USE_STDIN" not in env:
-        env["FFL_USE_STDIN"] = "1"
+    env = collectEnv(envOverrides, appConfig.envKeys)
+    for key, defaultValue in appConfig.defaultEnvValues.items():
+        env.setdefault(key, defaultValue)
 
-    if "ALLOWED_BASE_DIR" not in env:
-        print("Warning: ALLOWED_BASE_DIR is not set. This allows sharing any path.")
-        print("Recommended: set --allowed-base-dir to restrict file sharing.")
+    for key, warning in appConfig.envWarnings.items():
+        if key not in env:
+            print(f"Warning: {warning}")
 
     # When running as a standalone PyApp binary, register the binary itself as
     # the MCP server command so end-users don't need uvx or Python installed.
-    binaryPath = os.environ.get("FFL_MCP_BINARY")
+    binaryPath = os.environ.get(appConfig.binaryEnvVar) if appConfig.binaryEnvVar else None
     if binaryPath:
         entry: Dict[str, Any] = {"command": binaryPath, "args": []}
         if env:
             entry["env"] = env
-        name = args.serverName
+        name = serverName
     else:
-        name, entry = buildMcpServerEntry(args.serverName, uvxFrom, args.entrypoint, env)
+        name, entry = buildMcpServerEntry(serverName, uvxFrom, entrypoint, env)
 
     if args.printOnly and args.uninstall:
         raise ValueError("--print cannot be combined with --uninstall")
@@ -276,18 +355,18 @@ def main() -> None:
         backend = configBackends.get(target)
         if backend is None:
             continue
-        result = backend.uninstall(args.serverName) if args.uninstall else backend.install(
-            args.serverName,
+        result = backend.uninstall(serverName) if args.uninstall else backend.install(
+            serverName,
             entry,
             args.overwrite,
         )
         action = "Removed" if args.uninstall else "Installed"
-        print(f"{action} ffl-mcp {'from' if args.uninstall else 'into'} {result.label} config.")
+        print(f"{action} {serverName} {'from' if args.uninstall else 'into'} {result.label} config.")
         print(f"Config: {result.configPath}")
         if result.backupPath:
             print(f"Backup: {result.backupPath}")
         if not result.changed:
-            print("No existing ffl-mcp entry was found.")
+            print("No existing entry was found.")
         completedTargets.append(target)
 
     if not args.uninstall:
@@ -298,14 +377,14 @@ def main() -> None:
     elif "claude-code" in completedTargets:
         print("\nNext: restart Claude Code or reload MCP servers.")
 
-    print(f"Server name: {args.serverName}")
+    print(f"Server name: {serverName}")
 
     if binaryPath:
         print(f"Binary: {binaryPath}")
     elif uvxFrom:
         print(f"uvx source: {uvxFrom}")
     else:
-        print("uvx source: PyPI (uvx ffl-mcp)")
+        print(f"uvx source: PyPI (uvx {entrypoint})")
 
 
 if __name__ == "__main__":

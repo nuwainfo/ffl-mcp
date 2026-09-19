@@ -23,5 +23,8 @@ install = "install.Install:main"
 packages = ["src", "install"]
 include = ["src/**/*.py", "install/**/*.py"]
 
+[tool.hatch.build.targets.wheel.force-include]
+"install.config.json" = "install.config.json"
+
 [tool.hatch.build.targets.sdist]
-include = ["src/**/*.py", "install/**/*.py"]
+include = ["src/**/*.py", "install/**/*.py", "install.config.json"]
