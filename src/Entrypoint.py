@@ -52,17 +52,18 @@ def main() -> None:
         if binaryPath and binaryPath != "1" and os.path.isfile(binaryPath):
             os.environ["FFL_MCP_BINARY"] = binaryPath
 
-        # install/Install.py is generic and reads its app-specific defaults (server
-        # name, entrypoint, forwarded env vars, ...) from this manifest rather than
-        # hardcoding them — see install.config.json and install/Install.py's module
-        # docstring. Point it there explicitly since the installed binary's cwd
-        # won't generally be the repo root where a bare `install.config.json` would
-        # otherwise be auto-discovered.
+        # mcp_install.Install (from the separate `mcp-install` package — see
+        # pyproject.toml's [tool.uv.sources]) is generic and reads its app-specific
+        # defaults (server name, entrypoint, forwarded env vars, ...) from this
+        # manifest rather than hardcoding them — see install.config.json and
+        # mcp_install.Install's module docstring. Point it there explicitly since
+        # the installed binary's cwd won't generally be the repo root where a bare
+        # `install.config.json` would otherwise be auto-discovered.
         appConfigPath = pathlib.Path(__file__).resolve().parent.parent / "install.config.json"
         if appConfigPath.is_file() and "--app-config" not in sys.argv:
             sys.argv.extend(["--app-config", str(appConfigPath)])
 
-        from install.Install import main as installMain
+        from mcp_install.Install import main as installMain
         if command == "uninstall":
             sys.argv.append("--uninstall")
         installMain()

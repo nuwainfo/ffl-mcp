@@ -12,19 +12,20 @@ license = { text = "MIT" }
 dependencies = [
   "ffl-python==0.1.4",
   "fastmcp>=4,<4.0.4",
-  "comtypes>=1.0; sys_platform == 'win32'"
+  "comtypes>=1.0; sys_platform == 'win32'",
+  "mcp-install==0.1.0"
 ]
 
 [project.scripts]
 ffl-mcp = "src.Entrypoint:main"
-install = "install.Install:main"
+install = "mcp_install.Install:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src", "install"]
-include = ["src/**/*.py", "install/**/*.py"]
+packages = ["src"]
+include = ["src/**/*.py"]
 
 [tool.hatch.build.targets.wheel.force-include]
 "install.config.json" = "install.config.json"
 
 [tool.hatch.build.targets.sdist]
-include = ["src/**/*.py", "install/**/*.py", "install.config.json"]
+include = ["src/**/*.py", "install.config.json"]

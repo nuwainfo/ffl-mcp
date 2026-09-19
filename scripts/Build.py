@@ -68,7 +68,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # ── Application metadata ──────────────────────────────────────────────────────
 def _readVersion() -> str:
     toml = REPO_ROOT / "pyproject.toml"
-    match = re.search(r'^version\s*=\s*"([^"]+)"', toml.read_text(), re.MULTILINE)
+    match = re.search(r'^version\s*=\s*"([^"]+)"', toml.read_text(encoding="utf-8"), re.MULTILINE)
     if not match:
         raise RuntimeError("Could not find version in pyproject.toml")
     return match.group(1)
@@ -90,8 +90,10 @@ def _readDependency(packageName: str) -> str:
     raise RuntimeError(f"Missing project dependency: {packageName}")
 
 
+FFL_PYTHON_REQUIREMENT = _readDependency("ffl-python")
 FAST_MCP_REQUIREMENT = _readDependency("fastmcp")
 COMTYPES_REQUIREMENT = _readDependency("comtypes")
+MCP_INSTALL_REQUIREMENT = _readDependency("mcp-install")
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 PYAPP_REPO_ZIP = "https://github.com/ofek/pyapp/archive/refs/heads/master.zip"
@@ -312,7 +314,12 @@ def prepareDistribution(wheelPath: Path, rebuildDist: bool):
         print(f"ERROR: Python executable not found at {pythonExe}", file=sys.stderr)
         sys.exit(1)
 
+    # FFL_PYTHON_SOURCE / MCP_INSTALL_SOURCE let a developer test unpublished local
+    # changes to either dependency; both are normally installed straight from PyPI.
     fflPythonSource = os.environ.get("FFL_PYTHON_SOURCE")
+    mcpInstallSource = os.environ.get("MCP_INSTALL_SOURCE")
+    usingLocalSource = bool(fflPythonSource or mcpInstallSource)
+
     if fflPythonSource:
         sourcePath = Path(fflPythonSource).resolve()
         if not (sourcePath / "pyproject.toml").is_file():
@@ -322,10 +329,23 @@ def prepareDistribution(wheelPath: Path, rebuildDist: bool):
             str(pythonExe), "-m", "pip", "install", str(sourcePath),
             "--no-deps", "--force-reinstall", "--quiet",
         ])
+
+    if mcpInstallSource:
+        sourcePath = Path(mcpInstallSource).resolve()
+        if not (sourcePath / "pyproject.toml").is_file():
+            raise RuntimeError(f"MCP_INSTALL_SOURCE is not an mcp-install project: {sourcePath}")
+        print(f"  Pre-installing local mcp-install from {sourcePath}...")
         run([
-            str(pythonExe), "-m", "pip", "install", FAST_MCP_REQUIREMENT, COMTYPES_REQUIREMENT,
-            "--quiet",
+            str(pythonExe), "-m", "pip", "install", str(sourcePath),
+            "--no-deps", "--force-reinstall", "--quiet",
         ])
+
+    if usingLocalSource:
+        run([str(pythonExe), "-m", "pip", "install", FAST_MCP_REQUIREMENT, COMTYPES_REQUIREMENT, "--quiet"])
+        if not fflPythonSource:
+            run([str(pythonExe), "-m", "pip", "install", FFL_PYTHON_REQUIREMENT, "--quiet"])
+        if not mcpInstallSource:
+            run([str(pythonExe), "-m", "pip", "install", MCP_INSTALL_REQUIREMENT, "--quiet"])
 
     print(f"  Pre-installing {wheelPath.name} and all dependencies into distribution...")
     installCommand = [
@@ -335,7 +355,7 @@ def prepareDistribution(wheelPath: Path, rebuildDist: bool):
         "--no-warn-script-location",
         "--quiet",
     ]
-    if fflPythonSource:
+    if usingLocalSource:
         installCommand.append("--no-deps")
     run(installCommand)
     run([
