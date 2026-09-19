@@ -1,2 +1,4 @@
-fastmcp
-comtypes; sys_platform == "win32"
+ffl-python==0.1.4
+fastmcp>=4,<4.0.4
+comtypes>=1.0; sys_platform == "win32"
+mcp-install==0.1.0
