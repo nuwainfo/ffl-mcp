@@ -45,13 +45,18 @@ class FFLBindingTest(unittest.TestCase):
         self.assertEqual(share.call_args.kwargs["hook_url"], "http://127.0.0.1:9000/events")
         self.assertTrue(share.call_args.kwargs["capture_hook_events"])
 
-    def testSessionEventsUseBindingHistoryWithoutPreviewSidecar(self):
+    def testSessionEventsKeepRawFflNames(self):
         session = FakeShareSession()
         session.event_history = (
             SimpleNamespace(
-                name="/hook/transfer/progress",
+                name="/transfer/progress",
                 timestamp="2026-09-15T12:00:00Z",
                 data={"bytes": 1024},
+            ),
+            SimpleNamespace(
+                name="/download/complete",
+                timestamp="2026-09-15T12:00:01Z",
+                data={"downloadId": "abc"},
             ),
         )
         sessionId = "binding-history"
@@ -67,11 +72,18 @@ class FFLBindingTest(unittest.TestCase):
         result = MCP.fflGetSessionEvents(sessionId)
 
         self.assertTrue(result["ok"])
-        self.assertEqual(result["events"], [{
-            "event": "/hook/transfer/progress",
-            "timestamp": "2026-09-15T12:00:00Z",
-            "data": {"bytes": 1024},
-        }])
+        self.assertEqual(result["events"], [
+            {
+                "event": "/transfer/progress",
+                "timestamp": "2026-09-15T12:00:00Z",
+                "data": {"bytes": 1024},
+            },
+            {
+                "event": "/download/complete",
+                "timestamp": "2026-09-15T12:00:01Z",
+                "data": {"downloadId": "abc"},
+            },
+        ])
 
     def testShareTextStreamsWithoutCreatingTemporaryFile(self):
         session = FakeShareSession()
