@@ -19,6 +19,7 @@ This demo shows collaborative debugging: Claude on the left shares a local envir
   - [Linux / macOS — one-liner](#linux--macos--one-liner)
   - [Windows — one-liner (PowerShell)](#windows--one-liner-powershell)
   - [uvx (no binary, requires uv)](#uvx-no-binary-requires-uv)
+  - [Claude Code cloud sessions](#claude-code-cloud-sessions)
   - [Run directly (development)](#run-directly-development)
 - [MCP Config (manual JSON)](#mcp-config-manual-json)
 - [Tools](#tools)
@@ -93,6 +94,19 @@ uvx --from git+https://github.com/nuwainfo/ffl-mcp install --config /path/to/cla
 uvx --from git+https://github.com/nuwainfo/ffl-mcp install --codex-config /path/to/codex/config.toml
 uvx --from git+https://github.com/nuwainfo/ffl-mcp install --grok-config /path/to/grok/config.toml
 ```
+
+### Claude Code cloud sessions
+
+Cloud-hosted Claude Code sessions start in a fresh container. To make `ffl-mcp`
+available in every new session, open the cloud environment menu in the session
+title bar, choose **Edit**, and add this as the environment **Setup script**:
+
+```bash
+claude mcp add ffl -s user -e FFL_USE_STDIN=1 -- uvx --from git+https://github.com/nuwainfo/ffl-mcp ffl-mcp
+```
+
+The setup script runs when each new session starts. In the first new session,
+run `claude mcp list` to confirm that the `ffl` server was registered.
 
 ### Run directly (development)
 
