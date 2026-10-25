@@ -42,7 +42,7 @@ class InstallerConfigTest(unittest.TestCase):
         self.assertEqual(appConfig.serverName, "ffl")
         self.assertEqual(appConfig.entrypoint, "ffl-mcp")
         self.assertEqual(appConfig.distributionName, "ffl-mcp")
-        self.assertEqual(set(appConfig.envKeys), {"FFL_USE_STDIN", "ALLOWED_BASE_DIR"})
+        self.assertEqual(set(appConfig.envKeys), {"FFL_USE_STDIN", "ALLOWED_BASE_DIR", "FFL_NETWORK_PROFILE"})
         self.assertEqual(appConfig.binaryEnvVar, "FFL_MCP_BINARY")
 
     def testStandaloneInstallerDelegatesToTheSameBackend(self):

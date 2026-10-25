@@ -17,16 +17,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Dispatcher entry point for the ffl-mcp standalone binary.
-
-  ffl-mcp.exe            → runs the MCP server (stdio transport)
-  ffl-mcp.exe install    → runs the installer, configured to register this
-                           binary as the MCP server command (no uvx needed)
-
-PyApp sets the PYAPP env var to the binary path when PYAPP_PASS_LOCATION=1 is
-set at build time (see build_pyapp.py). The installer reads FFL_MCP_BINARY to
-decide whether to write a direct binary command or a uvx command.
-"""
+"""Dispatcher entry point for ffl-mcp and its installer."""
 
 import os
 import pathlib
@@ -34,8 +25,34 @@ import sys
 
 from importlib.metadata import version
 
+from .NetworkProfile import prepareInstallerArguments
+
 # Must be set before fastmcp is imported (Pydantic settings reads env vars at import time).
 os.environ.setdefault("FASTMCP_SHOW_CLI_BANNER", "false")
+
+
+def hasOption(arguments: list[str], option: str) -> bool:
+    return option in arguments or any(argument.startswith(f"{option}=") for argument in arguments)
+
+
+def runInstaller(arguments: list[str]) -> None:
+    """Register ffl-mcp after adding this install host's network profile."""
+    binaryPath = os.environ.get("PYAPP")
+    if binaryPath and binaryPath != "1" and os.path.isfile(binaryPath):
+        os.environ["FFL_MCP_BINARY"] = binaryPath
+
+    appConfigPath = pathlib.Path(__file__).resolve().parent.parent / "install.config.json"
+    if appConfigPath.is_file() and not hasOption(arguments, "--app-config"):
+        arguments.extend(["--app-config", str(appConfigPath)])
+
+    sys.argv = [sys.argv[0], *prepareInstallerArguments(arguments)]
+    from mcp_install.Install import main as installMain
+    installMain()
+
+
+def install() -> None:
+    """Console-script entry point for the install command."""
+    runInstaller(sys.argv[1:])
 
 
 def main() -> None:
@@ -45,28 +62,12 @@ def main() -> None:
 
     if len(sys.argv) > 1 and sys.argv[1] in {"install", "uninstall"}:
         command = sys.argv.pop(1)
-
-        # PYAPP is set by PyApp to the path of the running binary (ffl-mcp.exe)
-        # when PYAPP_PASS_LOCATION=1 is enabled at build time.
-        binaryPath = os.environ.get("PYAPP")
-        if binaryPath and binaryPath != "1" and os.path.isfile(binaryPath):
-            os.environ["FFL_MCP_BINARY"] = binaryPath
-
-        # mcp_install.Install (from the separate `mcp-install` package — see
-        # pyproject.toml's [tool.uv.sources]) is generic and reads its app-specific
-        # defaults (server name, entrypoint, forwarded env vars, ...) from this
-        # manifest rather than hardcoding them — see install.config.json and
-        # mcp_install.Install's module docstring. Point it there explicitly since
-        # the installed binary's cwd won't generally be the repo root where a bare
-        # `install.config.json` would otherwise be auto-discovered.
-        appConfigPath = pathlib.Path(__file__).resolve().parent.parent / "install.config.json"
-        if appConfigPath.is_file() and "--app-config" not in sys.argv:
-            sys.argv.extend(["--app-config", str(appConfigPath)])
-
-        from mcp_install.Install import main as installMain
+        arguments = sys.argv[1:]
         if command == "uninstall":
-            sys.argv.append("--uninstall")
-        installMain()
-    else:
-        from src.MCP import main as mcpMain
-        mcpMain()
+            arguments.append("--uninstall")
+
+        runInstaller(arguments)
+        return
+
+    from .MCP import main as mcpMain
+    mcpMain()

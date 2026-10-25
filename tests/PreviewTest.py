@@ -46,11 +46,10 @@ from unittest.mock import patch
 
 # Ensure src/ and tests/ are importable
 sys.path.insert(0, str(Path(__file__).parent.parent))
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 sys.path.insert(0, str(Path(__file__).parent))
 
-import Preview as previewMod
-import MCP
+from src import MCP
+from src import Preview as previewMod
 
 
 # ---------------------------------------------------------------------------

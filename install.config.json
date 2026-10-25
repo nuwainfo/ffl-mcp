@@ -3,7 +3,7 @@
   "entrypoint": "ffl-mcp",
   "distributionName": "ffl-mcp",
   "binaryEnvVar": "FFL_MCP_BINARY",
-  "envKeys": ["FFL_USE_STDIN", "ALLOWED_BASE_DIR"],
+  "envKeys": ["FFL_USE_STDIN", "ALLOWED_BASE_DIR", "FFL_NETWORK_PROFILE"],
   "defaultEnvValues": {
     "FFL_USE_STDIN": "1"
   },

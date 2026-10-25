@@ -40,6 +40,8 @@ from urllib.parse import parse_qs, quote, urlparse
 from fastmcp import FastMCP
 import ffl
 
+from .NetworkProfile import getNetworkProfile, resolveShareTransport
+
 logger = logging.getLogger("fflMcp")
 logger.setLevel(logging.DEBUG)
 
@@ -110,6 +112,7 @@ fflHookPath = os.environ.get("FFL_HOOK_PATH", "/events")
 fflHookUsername = os.environ.get("FFL_HOOK_USERNAME", "ffl-mcp")
 fflHookPassword = os.environ.get("FFL_HOOK_PASSWORD")
 fflHookMaxEvents = int(os.environ.get("FFL_HOOK_MAX_EVENTS", "200"))
+networkProfile = getNetworkProfile()
 
 
 def parseFFLDebug() -> Tuple[bool, Optional[str]]:
@@ -154,10 +157,7 @@ def parseBasicAuthHeader(headerValue: Optional[str]) -> Optional[Dict[str, str]]
     return {"userName": userName, "password": password}
 
 
-try:
-    from src.Preview import generateDefaultThumbnail, generateThumbnail
-except ImportError:
-    from Preview import generateDefaultThumbnail, generateThumbnail
+from .Preview import generateDefaultThumbnail, generateThumbnail
 
 
 class HookRequestHandler(BaseHTTPRequestHandler):
@@ -817,11 +817,14 @@ def shareWithFFL(
     pause: Optional[int] = None,
     enableReporting: bool = False,
     enablePreviewSidecar: bool = False,
+    transport: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Common sharing logic for all share functions.
     Handles hook server initialization, argument building, and process spawning.
     """
+    transportDecision = resolveShareTransport(forceRelay, transport, networkProfile)
+    effectivePreferredTunnel = preferredTunnel or transportDecision["preferredTunnel"]
     hookInfo = startHookServerIfNeeded(hookUrl, enablePreviewSidecar=enablePreviewSidecar)
     hookServer = hookInfo["hookServer"]
     effectiveHookUrl = hookInfo["hookUrl"]
@@ -846,11 +849,11 @@ def shareWithFFL(
             alias=alias,
             receipt=receipt,
             receipt_confirm=receiptConfirm,
-            force_relay=forceRelay,
+            force_relay=transportDecision["forceRelay"],
             upload=upload,
             resume_upload=resumeUpload,
             vfs=vfs,
-            preferred_tunnel=preferredTunnel,
+            preferred_tunnel=effectivePreferredTunnel,
             port=port,
             invite=invite,
             pause=pause,
@@ -886,6 +889,12 @@ def shareWithFFL(
         "link": session.link,
         "pid": session.pid,
         "cmd": list(session.argv),
+        "transportDecision": {
+            "mode": transportDecision["mode"],
+            "reason": transportDecision["reason"],
+            "automatic": transportDecision["automatic"],
+            "preferredTunnel": effectivePreferredTunnel,
+        },
     }
 
     if qrInTerminal and isinstance(session.stdout, str):
@@ -950,12 +959,21 @@ def fflShareText(
     receipt: Optional[str] = None,
     receiptConfirm: Optional[str] = None,
     forceRelay: bool = False,
+    transport: Optional[str] = None,
+    preferredTunnel: Optional[str] = None,
     port: Optional[int] = None,
     invite: bool = False,
     enableReporting: bool = False,
 ) -> Dict[str, Any]:
     """
     Share text content using ffl. Returns a sessionId and link.
+    Managed-sandbox policy:
+    When running inside ChatGPT Work, Grok Bot, or a cloud-hosted Codex sandbox,
+    use relay
+    immediately: forceRelay=True and preferredTunnel="default:web". These
+    environments may not allow usable UDP/ICE or raw TCP tunnels. Do not apply
+    this rule to local Codex CLI, local Grok Build, or ordinary user machines.
+
     If qrInTerminal is True, also returns a QR code as ASCII art for terminal display.
 
     IMPORTANT: Always present the returned link so the user can click it to open in a browser.
@@ -993,7 +1011,7 @@ def fflShareText(
 
     return shareWithFFL(
         "-", textBytes, [], name, e2ee, authUser, authPassword, maxDownloads, timeoutSeconds,
-        hookUrl, proxy, qrInTerminal, **kwargs
+        hookUrl, proxy, qrInTerminal, transport=transport, preferredTunnel=preferredTunnel, **kwargs
     )
 
 
@@ -1017,12 +1035,21 @@ def fflShareBase64(
     receipt: Optional[str] = None,
     receiptConfirm: Optional[str] = None,
     forceRelay: bool = False,
+    transport: Optional[str] = None,
+    preferredTunnel: Optional[str] = None,
     port: Optional[int] = None,
     invite: bool = False,
     enableReporting: bool = False,
 ) -> Dict[str, Any]:
     """
     Share arbitrary binary data (base64-encoded) using ffl. Returns a sessionId and link.
+    Managed-sandbox policy:
+    When running inside ChatGPT Work, Grok Bot, or a cloud-hosted Codex sandbox,
+    use relay
+    immediately: forceRelay=True and preferredTunnel="default:web". These
+    environments may not allow usable UDP/ICE or raw TCP tunnels. Do not apply
+    this rule to local Codex CLI, local Grok Build, or ordinary user machines.
+
     If qrInTerminal is True, also returns a QR code as ASCII art for terminal display.
 
     IMPORTANT: Always present the returned link so the user can click it to open in a browser.
@@ -1060,7 +1087,7 @@ def fflShareBase64(
 
     return shareWithFFL(
         "-", rawBytes, [], name, e2ee, authUser, authPassword, maxDownloads, timeoutSeconds,
-        hookUrl, proxy, qrInTerminal, **kwargs
+        hookUrl, proxy, qrInTerminal, transport=transport, preferredTunnel=preferredTunnel, **kwargs
     )
 
 
@@ -1086,6 +1113,7 @@ def fflShareFile(
     receipt: Optional[str] = None,
     receiptConfirm: Optional[str] = None,
     forceRelay: bool = False,
+    transport: Optional[str] = None,
     upload: Optional[str] = None,
     resumeUpload: bool = False,
     vfs: bool = False,
@@ -1097,6 +1125,13 @@ def fflShareFile(
 ) -> Dict[str, Any]:
     """
     Share a local file or folder using ffl. Respects ALLOWED_BASE_DIR when configured.
+    Managed-sandbox policy:
+    When running inside ChatGPT Work, Grok Bot, or a cloud-hosted Codex sandbox,
+    use relay
+    immediately: forceRelay=True and preferredTunnel="default:web". These
+    environments may not allow usable UDP/ICE or raw TCP tunnels. Do not apply
+    this rule to local Codex CLI, local Grok Build, or ordinary user machines.
+
     If qrInTerminal is True, also returns a QR code as ASCII art for terminal display.
 
     IMPORTANT: Always present the returned link so the user can click it to open in a browser.
@@ -1146,6 +1181,7 @@ def fflShareFile(
         resumeUpload=resumeUpload,
         vfs=vfs,
         preferredTunnel=preferredTunnel,
+        transport=transport,
         pause=pause,
         enablePreviewSidecar=sharePath.is_dir(),
         **kwargs,
@@ -1176,6 +1212,7 @@ def fflShareFiles(
     receipt: Optional[str] = None,
     receiptConfirm: Optional[str] = None,
     forceRelay: bool = False,
+    transport: Optional[str] = None,
     upload: Optional[str] = None,
     resumeUpload: bool = False,
     preferredTunnel: Optional[str] = None,
@@ -1186,6 +1223,13 @@ def fflShareFiles(
 ) -> Dict[str, Any]:
     """
     Share multiple local files at once using ffl. ffl auto-zips them into a single download.
+    Managed-sandbox policy:
+    When running inside ChatGPT Work, Grok Bot, or a cloud-hosted Codex sandbox,
+    use relay
+    immediately: forceRelay=True and preferredTunnel="default:web". These
+    environments may not allow usable UDP/ICE or raw TCP tunnels. Do not apply
+    this rule to local Codex CLI, local Grok Build, or ordinary user machines.
+
 
     IMPORTANT: Always present the returned link so the user can click it to open in a browser.
     Do not display it as a plain unformatted URL — in some interfaces (such as Claude Dispatch)
@@ -1236,6 +1280,7 @@ def fflShareFiles(
         upload=upload,
         resumeUpload=resumeUpload,
         preferredTunnel=preferredTunnel,
+        transport=transport,
         pause=pause,
         enablePreviewSidecar=True,
         **kwargs,

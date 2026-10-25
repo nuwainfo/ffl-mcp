@@ -7,9 +7,9 @@ from types import SimpleNamespace
 from pathlib import Path
 from unittest.mock import patch
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
-import MCP
+from src import MCP
 
 
 class FakeShareSession:
@@ -42,6 +42,12 @@ class FFLBindingTest(unittest.TestCase):
 
         self.assertEqual(result["link"], session.link)
         self.assertEqual(result["pid"], session.pid)
+        self.assertEqual(result["transportDecision"], {
+            "mode": "p2p",
+            "reason": "p2pFirst",
+            "automatic": True,
+            "preferredTunnel": None,
+        })
         self.assertEqual(share.call_args.kwargs["hook_url"], "http://127.0.0.1:9000/events")
         self.assertTrue(share.call_args.kwargs["capture_hook_events"])
 
@@ -104,6 +110,32 @@ class FFLBindingTest(unittest.TestCase):
 
         self.assertEqual(result["link"], session.link)
         self.assertEqual(shareBytes.call_args.args[:2], (b"\x00\xff\x80A", "payload.bin"))
+
+    def testSyntheticDnsProfileForcesRelayAndToolCanOverrideIt(self):
+        session = FakeShareSession()
+        managedProfile = {
+            "mode": "relay",
+            "reason": "syntheticDns19818",
+            "automatic": True,
+        }
+        with patch.object(MCP, "networkProfile", managedProfile):
+            with patch.object(MCP.ffl, "share", return_value=session) as share:
+                automatic = MCP.shareWithFFL(
+                    "file.txt", None, [], None, False, None, None, 1, 30,
+                    None, None, False,
+                )
+                override = MCP.shareWithFFL(
+                    "file.txt", None, [], None, False, None, None, 1, 30,
+                    None, None, False, transport="p2p",
+                )
+
+        self.assertTrue(share.call_args_list[0].kwargs["force_relay"])
+        self.assertEqual(share.call_args_list[0].kwargs["preferred_tunnel"], "default:web")
+        self.assertFalse(share.call_args_list[1].kwargs["force_relay"])
+        self.assertIsNone(share.call_args_list[1].kwargs["preferred_tunnel"])
+        self.assertEqual(automatic["transportDecision"]["reason"], "syntheticDns19818")
+        self.assertEqual(automatic["transportDecision"]["preferredTunnel"], "default:web")
+        self.assertEqual(override["transportDecision"]["reason"], "toolTransport")
 
     def testDownloadReturnsBindingMetadataInsteadOfParsingCliOutput(self):
         downloadResult = SimpleNamespace(

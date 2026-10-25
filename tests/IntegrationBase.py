@@ -27,9 +27,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
-import MCP
+from src import MCP
 
 logger = logging.getLogger("fflMcpIntegrationBase")
 

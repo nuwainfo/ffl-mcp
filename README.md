@@ -154,6 +154,8 @@ uvx --from git+https://github.com/nuwainfo/ffl-mcp ffl-mcp
 | `receipt` | — | Email notification when recipient downloads |
 | `receiptConfirm` | — | Require recipient confirmation before download; pass a message or `""` |
 | `forceRelay` | `False` | Disable WebRTC, route all traffic through tunnel |
+| `transport` | — | Explicitly choose `p2p` or `relay`. `p2p` overrides an automatically detected managed-sandbox relay profile. |
+| `preferredTunnel` | — | Preferred ffl tunnel, for example `default`, `default:web`, `cloudflare`, `ngrok`, or `bore`. A caller-provided value overrides an automatic profile choice. |
 | `port` | — | Local HTTP server port (auto-detect by default). Useful with fixed tunnels. |
 | `invite` | `False` | Open the ffl invite page in a local browser with the generated sharing link. |
 | `enableReporting` | `False` | Enable ffl diagnostic error reporting. Disabled by default. |
@@ -178,7 +180,12 @@ preview page) are a separate, always-on mechanism: MCP starts them
 automatically for folder shares and multi-file shares regardless of `preview`,
 and never for single-file shares.
 
-**Response fields:** `sessionId`, `link`, `pid`, `qrCode?` (ASCII art when `qrInTerminal=True`), `debugLogPath?`
+**Managed-sandbox policy:** In ChatGPT Work, Grok Bot, or a cloud-hosted Codex
+sandbox, use `forceRelay=True` and `preferredTunnel="default:web"` immediately.
+These environments may not permit usable UDP/ICE or raw TCP tunnels. Do not apply
+this rule to local Codex CLI, local Grok Build, or ordinary user machines.
+
+**Response fields:** `sessionId`, `link`, `pid`, `transportDecision`, `qrCode?` (ASCII art when `qrInTerminal=True`), `debugLogPath?`. `transportDecision` reports the selected mode, reason, automatic status, and effective `preferredTunnel`.
 
 ### Downloading
 
@@ -226,6 +233,8 @@ Generates an RSA keypair for passwordless `pubkey` recipient auth:
 - Folder and multi-file previews start a local webhook server so FFL can register preview routes.
 - `FFL_DEBUG=1` saves ffl output to a temp log file; path returned as `debugLogPath`. Set `FFL_DEBUG=/path/to/log.txt` to use a fixed path.
 - `ALLOWED_BASE_DIR` restricts `fflShareFile`/`fflShareFiles` to a specific directory.
+- During installation, ffl-mcp probes `example.com` and `stun.cloudflare.com` in parallel for up to 0.5 seconds. If every answer is in the synthetic `198.18.0.0/15` range, it registers `FFL_NETWORK_PROFILE=synthetic-dns-198-18`; later shares immediately use relay through `default:web` instead of waiting for P2P. No profile is written for timeouts, failures, mixed answers, or ordinary networks.
+- Pass `--env FFL_NETWORK_PROFILE=p2p` to `install` to override the install-time result, or use a share tool's `transport` value `p2p` for one direct-P2P attempt.
 
 ---
 

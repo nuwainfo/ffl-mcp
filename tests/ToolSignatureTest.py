@@ -20,9 +20,9 @@ import sys
 import unittest
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
-import MCP
+from src import MCP
 
 
 class ToolSignatureTest(unittest.TestCase):
@@ -30,6 +30,14 @@ class ToolSignatureTest(unittest.TestCase):
     def _params(self, tool):
         fn = tool.fn if hasattr(tool, "fn") else tool
         return inspect.signature(fn).parameters
+
+    def testShareToolsDescribeManagedSandboxRelayPolicy(self):
+        for tool in (MCP.fflShareText, MCP.fflShareBase64, MCP.fflShareFile, MCP.fflShareFiles):
+            fn = tool.fn if hasattr(tool, "fn") else tool
+            self.assertIn("Managed-sandbox policy", fn.__doc__)
+            self.assertIn("Grok Bot", fn.__doc__)
+            self.assertIn("default:web", fn.__doc__)
+            self.assertIn("local Grok Build", fn.__doc__)
 
     # --- fflShareText ---
 
@@ -60,6 +68,10 @@ class ToolSignatureTest(unittest.TestCase):
     def testFFLShareTextHasForceRelay(self):
         self.assertIn("forceRelay", self._params(MCP.fflShareText))
 
+    def testFFLShareTextHasTransportAndPreferredTunnel(self):
+        self.assertIn("transport", self._params(MCP.fflShareText))
+        self.assertIn("preferredTunnel", self._params(MCP.fflShareText))
+
     def testFFLShareTextHasPort(self):
         self.assertIn("port", self._params(MCP.fflShareText))
 
@@ -76,6 +88,10 @@ class ToolSignatureTest(unittest.TestCase):
 
     def testFFLShareBase64HasForceRelay(self):
         self.assertIn("forceRelay", self._params(MCP.fflShareBase64))
+
+    def testFFLShareBase64HasTransportAndPreferredTunnel(self):
+        self.assertIn("transport", self._params(MCP.fflShareBase64))
+        self.assertIn("preferredTunnel", self._params(MCP.fflShareBase64))
 
     def testFFLShareBase64HasPort(self):
         self.assertIn("port", self._params(MCP.fflShareBase64))
@@ -105,6 +121,9 @@ class ToolSignatureTest(unittest.TestCase):
 
     def testFFLShareFileHasPreferredTunnel(self):
         self.assertIn("preferredTunnel", self._params(MCP.fflShareFile))
+
+    def testFFLShareFileHasTransport(self):
+        self.assertIn("transport", self._params(MCP.fflShareFile))
 
     def testFFLShareFileHasRecipientAuth(self):
         self.assertIn("recipientAuth", self._params(MCP.fflShareFile))
@@ -151,6 +170,9 @@ class ToolSignatureTest(unittest.TestCase):
 
     def testFFLShareFilesHasUpload(self):
         self.assertIn("upload", self._params(MCP.fflShareFiles))
+
+    def testFFLShareFilesHasTransport(self):
+        self.assertIn("transport", self._params(MCP.fflShareFiles))
 
     def testFFLShareFilesHasRecipientAuth(self):
         self.assertIn("recipientAuth", self._params(MCP.fflShareFiles))
