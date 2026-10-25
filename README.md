@@ -23,6 +23,7 @@ This demo shows collaborative debugging: Claude on the left shares a local envir
 - [MCP Config (manual JSON)](#mcp-config-manual-json)
 - [Tools](#tools)
   - [Sharing](#sharing)
+  - [Sharing from a Remote Agent](#sharing-from-a-remote-agent)
   - [Downloading](#downloading)
   - [Keygen](#keygen)
   - [Session Management](#session-management)
@@ -180,12 +181,25 @@ preview page) are a separate, always-on mechanism: MCP starts them
 automatically for folder shares and multi-file shares regardless of `preview`,
 and never for single-file shares.
 
-**Managed-sandbox policy:** In ChatGPT Work, Grok Bot, or a cloud-hosted Codex
-sandbox, use `forceRelay=True` and `preferredTunnel="default:web"` immediately.
-These environments may not permit usable UDP/ICE or raw TCP tunnels. Do not apply
-this rule to local Codex CLI, local Grok Build, or ordinary user machines.
+**Managed-sandbox policy:** In ChatGPT Work, Grok Bot, a cloud-hosted Codex
+sandbox, or a Claude Code cloud session (Claude Code on the web / claude.ai/code,
+or a remote session started from the Claude app), use `forceRelay=True` and
+`preferredTunnel="default:web"` immediately. These environments may only allow
+outbound HTTPS through a proxy, with no usable UDP/ICE or raw TCP tunnels. Do not
+apply this rule to local Claude Code CLI, local Codex CLI, local Grok Build, or
+ordinary user machines.
 
 **Response fields:** `sessionId`, `link`, `pid`, `transportDecision`, `qrCode?` (ASCII art when `qrInTerminal=True`), `debugLogPath?`. `transportDecision` reports the selected mode, reason, automatic status, and effective `preferredTunnel`.
+
+### Sharing from a Remote Agent
+
+`fflHowToShareFromRemoteAgent()` is guidance for a cloud-hosted assistant such
+as Grok Bot when the user asks it to share a file or folder on the user's own
+computer. It instructs the assistant to operate on that computer, use an
+existing `ffl`/`ffl.com` when present, or locate the runtime bundled with the
+installed `ffl-mcp` or `ffl-python` package without relying on a fixed internal
+package path. Local agents such as Claude Code, Codex, and Cursor use
+`fflShareFile` directly and do not need this tool.
 
 ### Downloading
 

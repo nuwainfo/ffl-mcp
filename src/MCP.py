@@ -968,11 +968,13 @@ def fflShareText(
     """
     Share text content using ffl. Returns a sessionId and link.
     Managed-sandbox policy:
-    When running inside ChatGPT Work, Grok Bot, or a cloud-hosted Codex sandbox,
-    use relay
-    immediately: forceRelay=True and preferredTunnel="default:web". These
-    environments may not allow usable UDP/ICE or raw TCP tunnels. Do not apply
-    this rule to local Codex CLI, local Grok Build, or ordinary user machines.
+    When running inside ChatGPT Work, Grok Bot, a cloud-hosted Codex sandbox,
+    or a Claude Code cloud session (Claude Code on the web / claude.ai/code,
+    or a remote session started from the Claude app), use relay immediately:
+    forceRelay=True and preferredTunnel="default:web". These environments may
+    only allow outbound HTTPS through a proxy, with no usable UDP/ICE or raw
+    TCP tunnels. Do not apply this rule to local Claude Code CLI, local Codex
+    CLI, local Grok Build, or ordinary user machines.
 
     If qrInTerminal is True, also returns a QR code as ASCII art for terminal display.
 
@@ -1044,11 +1046,13 @@ def fflShareBase64(
     """
     Share arbitrary binary data (base64-encoded) using ffl. Returns a sessionId and link.
     Managed-sandbox policy:
-    When running inside ChatGPT Work, Grok Bot, or a cloud-hosted Codex sandbox,
-    use relay
-    immediately: forceRelay=True and preferredTunnel="default:web". These
-    environments may not allow usable UDP/ICE or raw TCP tunnels. Do not apply
-    this rule to local Codex CLI, local Grok Build, or ordinary user machines.
+    When running inside ChatGPT Work, Grok Bot, a cloud-hosted Codex sandbox,
+    or a Claude Code cloud session (Claude Code on the web / claude.ai/code,
+    or a remote session started from the Claude app), use relay immediately:
+    forceRelay=True and preferredTunnel="default:web". These environments may
+    only allow outbound HTTPS through a proxy, with no usable UDP/ICE or raw
+    TCP tunnels. Do not apply this rule to local Claude Code CLI, local Codex
+    CLI, local Grok Build, or ordinary user machines.
 
     If qrInTerminal is True, also returns a QR code as ASCII art for terminal display.
 
@@ -1126,11 +1130,13 @@ def fflShareFile(
     """
     Share a local file or folder using ffl. Respects ALLOWED_BASE_DIR when configured.
     Managed-sandbox policy:
-    When running inside ChatGPT Work, Grok Bot, or a cloud-hosted Codex sandbox,
-    use relay
-    immediately: forceRelay=True and preferredTunnel="default:web". These
-    environments may not allow usable UDP/ICE or raw TCP tunnels. Do not apply
-    this rule to local Codex CLI, local Grok Build, or ordinary user machines.
+    When running inside ChatGPT Work, Grok Bot, a cloud-hosted Codex sandbox,
+    or a Claude Code cloud session (Claude Code on the web / claude.ai/code,
+    or a remote session started from the Claude app), use relay immediately:
+    forceRelay=True and preferredTunnel="default:web". These environments may
+    only allow outbound HTTPS through a proxy, with no usable UDP/ICE or raw
+    TCP tunnels. Do not apply this rule to local Claude Code CLI, local Codex
+    CLI, local Grok Build, or ordinary user machines.
 
     If qrInTerminal is True, also returns a QR code as ASCII art for terminal display.
 
@@ -1224,11 +1230,13 @@ def fflShareFiles(
     """
     Share multiple local files at once using ffl. ffl auto-zips them into a single download.
     Managed-sandbox policy:
-    When running inside ChatGPT Work, Grok Bot, or a cloud-hosted Codex sandbox,
-    use relay
-    immediately: forceRelay=True and preferredTunnel="default:web". These
-    environments may not allow usable UDP/ICE or raw TCP tunnels. Do not apply
-    this rule to local Codex CLI, local Grok Build, or ordinary user machines.
+    When running inside ChatGPT Work, Grok Bot, a cloud-hosted Codex sandbox,
+    or a Claude Code cloud session (Claude Code on the web / claude.ai/code,
+    or a remote session started from the Claude app), use relay immediately:
+    forceRelay=True and preferredTunnel="default:web". These environments may
+    only allow outbound HTTPS through a proxy, with no usable UDP/ICE or raw
+    TCP tunnels. Do not apply this rule to local Claude Code CLI, local Codex
+    CLI, local Grok Build, or ordinary user machines.
 
 
     IMPORTANT: Always present the returned link so the user can click it to open in a browser.
@@ -1287,6 +1295,24 @@ def fflShareFiles(
     )
 
     return applyPreviewFlag(result, preview)
+
+
+@mcp.tool
+def fflHowToShareFromRemoteAgent() -> Dict[str, str]:
+    """
+    Only for cloud-hosted assistants (e.g. Grok Bot) that cannot access the
+    user's computer directly. Call this first when you need to share a file or
+    folder that lives on the user's computer. Local agents such as Claude Code,
+    Codex or Cursor do not need it.
+    """
+    return {
+        "instructions": """How to share a file from the user's own computer when you run in the cloud:
+
+1. Run commands on the user's computer (the user may be asked to approve them; that is expected). Check whether ffl is already installed (`ffl`, or `ffl.com`). If it is, use it directly. Do not ask the user to install anything.
+2. If ffl is not installed, do not ask the user to install it. Locate the ffl runtime bundled with the installed ffl-mcp or ffl-python package, copy it to a temporary folder on the user's computer, and use that copy.
+3. Share with the `share` command of that ffl. Map the options you need (download limit, expiry, password, and so on) from the parameters of `fflShareFile`, and choose them according to what the user asked for. Sharing is peer-to-peer, so keep the process running until the recipient has finished downloading, then give the user the link.
+4. If something fails, troubleshoot it yourself instead of handing the problem back to the user."""
+    }
 
 
 @mcp.tool

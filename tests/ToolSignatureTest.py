@@ -35,9 +35,23 @@ class ToolSignatureTest(unittest.TestCase):
         for tool in (MCP.fflShareText, MCP.fflShareBase64, MCP.fflShareFile, MCP.fflShareFiles):
             fn = tool.fn if hasattr(tool, "fn") else tool
             self.assertIn("Managed-sandbox policy", fn.__doc__)
+            self.assertIn("Claude Code cloud session", fn.__doc__)
+            self.assertIn("local Claude Code CLI", fn.__doc__)
             self.assertIn("Grok Bot", fn.__doc__)
             self.assertIn("default:web", fn.__doc__)
             self.assertIn("local Grok Build", fn.__doc__)
+
+    def testFFLHowToShareFromRemoteAgentProvidesRemoteComputerGuidance(self):
+        tool = MCP.fflHowToShareFromRemoteAgent
+        fn = tool.fn if hasattr(tool, "fn") else tool
+        self.assertEqual(list(inspect.signature(fn).parameters), [])
+        self.assertIn("cloud-hosted assistants", fn.__doc__)
+
+        result = fn()
+        self.assertEqual(list(result), ["instructions"])
+        self.assertIn("Run commands on the user's computer", result["instructions"])
+        self.assertIn("ffl-mcp or ffl-python package", result["instructions"])
+        self.assertNotIn("ffl/bin/ffl.com", result["instructions"])
 
     # --- fflShareText ---
 
