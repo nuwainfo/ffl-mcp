@@ -1,4 +1,4 @@
-# ffl-mcp (local-only)
+# ffl-mcp 
 MCP server for ffl. Let AI share anything for you.
 
 Backed by [ffl](https://github.com/nuwainfo/ffl), which turns any file/folder into an HTTPS link.
